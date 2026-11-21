@@ -1,0 +1,16 @@
+{
+  "name": "nexus-smarthome-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server Bridge antara XiaoZhi AI Voice Assistant dan MQTT Broker Smart Home",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "mqtt": "^5.10.1",
+    "ws": "^8.18.0"
+  }
+}

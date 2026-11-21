@@ -1,0 +1,11 @@
+# Kredensial & Konfigurasi Lokal Rahasia
+.env
+.env.local
+config/mqtt.local.js
+esp32/secrets.h
+
+# Dependencies & Build Output
+node_modules/
+dist/
+.DS_Store
+Thumbs.db
