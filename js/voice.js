@@ -1,13 +1,12 @@
 /**
  * Modul Asisten Suara AI Langsung di Website (Gemini Function Calling + TTS Bahasa Indonesia)
- * Berjalan langsung di browser HP/PC tanpa membutuhkan server laptop (mcp-server)
+ * API Key disimpan aman di localStorage browser (tidak terekspos di GitHub publik)
  */
 import { DEVICE_KEYS } from "../config/mqtt-contract.js";
 import { DEVICE_DEFINITIONS } from "./devices.js";
 
-// Tempel API Key dari Google AI Studio (sudah dibatasi untuk https://vxzny.github.io/*)
-const GEMINI_API_KEY = "AQ.Ab8RN6KEFMgV8ou9v41O2VGMTq8rFIMCG5jB7YlfSmNOVMgSVg";
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+const STORAGE_KEY_API = "nexus_gemini_api_key";
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 const SMART_HOME_TOOLS = [
   {
@@ -72,8 +71,73 @@ export class VoiceAssistantController {
     this.transcriptEl = document.getElementById("voice-transcript-text");
     this.responseEl = document.getElementById("voice-response-text");
 
+    this.initApiKeyUI();
     this.initSpeechRecognition();
     this.bindEvents();
+  }
+
+  getApiKey() {
+    return (localStorage.getItem(STORAGE_KEY_API) || "").trim();
+  }
+
+  initApiKeyUI() {
+    if (!this.bannerEl) return;
+
+    // Tambahkan tombol kecil "Key AI" di samping badge status
+    if (this.statusBadgeEl && !document.getElementById("btn-ai-key-toggle")) {
+      const keyBtn = document.createElement("button");
+      keyBtn.id = "btn-ai-key-toggle";
+      keyBtn.type = "button";
+      keyBtn.textContent = this.getApiKey() ? "Ganti Key AI" : "Pasang Key AI";
+      keyBtn.style.cssText =
+        "margin-left:8px;padding:3px 10px;font-size:11px;border-radius:999px;border:1px solid #38bdf8;background:rgba(56,189,248,0.12);color:#38bdf8;cursor:pointer;";
+      this.statusBadgeEl.insertAdjacentElement("afterend", keyBtn);
+
+      keyBtn.addEventListener("click", () => this.toggleKeyBox());
+    }
+
+    // Buat kotak input API Key di dalam panel suara (disimpan lokal di browser)
+    const box = document.createElement("div");
+    box.id = "ai-key-setup-box";
+    box.style.cssText =
+      "display:none;margin:10px 0;padding:10px;border-radius:10px;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.35);gap:8px;flex-wrap:wrap;align-items:center;";
+
+    box.innerHTML = `
+      <input id="input-gemini-key" type="password" placeholder="Tempel Gemini API Key (AIzaSy...) di sini"
+        style="flex:1;min-width:200px;padding:8px 10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#f8fafc;font-size:13px;" />
+      <button id="btn-save-gemini-key" type="button"
+        style="padding:8px 14px;border-radius:8px;border:none;background:#0ea5e9;color:#fff;font-weight:600;font-size:13px;cursor:pointer;">
+        Simpan Key
+      </button>
+    `;
+
+    this.bannerEl.appendChild(box);
+
+    if (!this.getApiKey()) {
+      box.style.display = "flex";
+    }
+
+    document.getElementById("btn-save-gemini-key")?.addEventListener("click", () => {
+      const inputEl = document.getElementById("input-gemini-key");
+      const val = (inputEl?.value || "").trim();
+      if (!val.startsWith("AIza")) {
+        this.onNotify?.("Format API Key tidak valid. Pastikan diawali AIza...", "warning");
+        return;
+      }
+      localStorage.setItem(STORAGE_KEY_API, val);
+      inputEl.value = "";
+      box.style.display = "none";
+      const toggleBtn = document.getElementById("btn-ai-key-toggle");
+      if (toggleBtn) toggleBtn.textContent = "Ganti Key AI";
+      this.setResponse("API Key AI tersimpan di browser ini. Silakan tekan Suara HP dan bicara bebas.", true);
+      this.onNotify?.("API Key AI berhasil disimpan!", "success");
+    });
+  }
+
+  toggleKeyBox() {
+    const box = document.getElementById("ai-key-setup-box");
+    if (!box) return;
+    box.style.display = box.style.display === "none" ? "flex" : "none";
   }
 
   initSpeechRecognition() {
@@ -230,13 +294,18 @@ ${devicesSummary}`;
   }
 
   async handleUserSpeech(userText) {
-    // Jika API Key belum diisi, langsung gunakan mode kata kunci lokal
-    if (!GEMINI_API_KEY || GEMINI_API_KEY.includes("TEMPEL_API_KEY")) {
-      this.processLocalFallback(userText);
+    const apiKey = this.getApiKey();
+    if (!apiKey) {
+      this.processLocalFallback(
+        userText,
+        "API Key AI belum dipasang (klik tombol Pasang Key AI di atas)."
+      );
       return;
     }
 
     this.setResponse("AI sedang memproses perintah Anda...", false);
+
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
     const systemInstruction = `Kamu adalah asisten Smart Home cerdas bernama NEXUS AI yang terintegrasi langsung di dashboard rumah.
 Jawablah pengguna dalam Bahasa Indonesia yang ramah, ringkas, dan natural (maksimal 2 kalimat agar enak didengar lewat speaker HP).
@@ -248,7 +317,7 @@ Aturan kontrol:
 - Jika ESP32 sedang OFFLINE, beritahu pengguna bahwa perangkat fisik sedang tidak terhubung ke internet.`;
 
     try {
-      const res = await fetch(GEMINI_ENDPOINT, {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -259,7 +328,11 @@ Aturan kontrol:
         })
       });
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        const reason = errJson?.error?.message || `HTTP ${res.status}`;
+        throw new Error(reason);
+      }
 
       const data = await res.json();
       const parts = data?.candidates?.[0]?.content?.parts || [];
@@ -273,9 +346,8 @@ Aturan kontrol:
       } else {
         this.processLocalFallback(userText);
       }
-    } catch {
-      // Fallback otomatis ke pengenalan lokal jika API AI gagal dijangkau
-      this.processLocalFallback(userText);
+    } catch (err) {
+      this.processLocalFallback(userText, `AI error: ${err.message}`);
     }
   }
 
@@ -329,38 +401,40 @@ Aturan kontrol:
     }
   }
 
-  processLocalFallback(rawText) {
+  processLocalFallback(rawText, aiErrorNote = "") {
     const text = rawText.toLowerCase();
-    const isOn = /\b(nyalakan|hidupkan|aktifkan|on)\b/.test(text);
-    const isOff = /\b(matikan|nonaktifkan|off)\b/.test(text);
-    const isOpen = /\b(buka|open)\b/.test(text);
-    const isClose = /\b(tutup|kunci|close)\b/.test(text);
+    // Mendukung kata dasar maupun kata berimbuhan (menyalakan, mematikan, membuka, menutup)
+    const isOn = /(nyalakan|hidupkan|aktifkan|\bon\b)/.test(text);
+    const isOff = /(matikan|nonaktifkan|\boff\b)/.test(text);
+    const isOpen = /(buka|\bopen\b)/.test(text);
+    const isClose = /(tutup|kunci|\bclose\b)/.test(text);
 
     this.activeBatch = null;
 
-    if (/\b(lampu 1|lampu satu)\b/.test(text) && (isOn || isOff)) {
+    if (/(lampu 1|lampu satu)/.test(text) && (isOn || isOff)) {
       this.onExecuteCommand?.("lampu1", isOn ? "ON" : "OFF", "hp-voice");
       return;
     }
-    if (/\b(lampu 2|lampu dua)\b/.test(text) && (isOn || isOff)) {
+    if (/(lampu 2|lampu dua)/.test(text) && (isOn || isOff)) {
       this.onExecuteCommand?.("lampu2", isOn ? "ON" : "OFF", "hp-voice");
       return;
     }
-    if (/\bkipas\b/.test(text) && (isOn || isOff)) {
+    if (/kipas/.test(text) && (isOn || isOff)) {
       this.onExecuteCommand?.("kipas", isOn ? "ON" : "OFF", "hp-voice");
       return;
     }
-    if (/\bjemuran\b/.test(text) && (isOpen || isClose)) {
+    if (/jemuran/.test(text) && (isOpen || isClose)) {
       this.onExecuteCommand?.("jemuran", isOpen ? "OPEN" : "CLOSE", "hp-voice");
       return;
     }
-    if (/\bpintu\b/.test(text) && (isOpen || isClose)) {
+    if (/pintu/.test(text) && (isOpen || isClose)) {
       this.setResponse("Silakan konfirmasi akses pintu utama di layar.", true);
       this.onRequestDoorConfirm?.(isOpen ? "OPEN" : "CLOSE");
       return;
     }
 
-    this.setResponse("Maaf, perintah tidak dikenali dan koneksi AI sedang tidak tersedia.", true);
+    const detail = aiErrorNote ? ` (${aiErrorNote})` : "";
+    this.setResponse(`Perintah belum dipahami${detail}.`, true);
   }
 
   handleCommandOutcome({ deviceKey, state, success, isTimeout }) {
