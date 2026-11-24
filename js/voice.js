@@ -6,7 +6,7 @@ import { DEVICE_KEYS } from "../config/mqtt-contract.js";
 import { DEVICE_DEFINITIONS } from "./devices.js";
 
 // Tempel URL Cloudflare Worker Anda di bawah ini (aman dipublikasikan di GitHub)
-const AI_PROXY_URL = "https://nexus-ai-proxy.euro-smarthome.vinscodex05.workers.dev";
+const AI_PROXY_URL = "https://euro-smarthome.vinscodex05.workers.dev";
 
 const SMART_HOME_TOOLS = [
   {
