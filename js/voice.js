@@ -1,9 +1,58 @@
 /**
- * Modul Kontrol Suara & Umpan Balik Suara (TTS) Bahasa Indonesia untuk Browser HP
- * Mendukung kontrol satuan seluruh perangkat (Lampu 1, Lampu 2, Kipas, Jemuran, Pintu) & cek status
+ * Modul Asisten Suara AI Langsung di Website (Gemini Function Calling + TTS Bahasa Indonesia)
+ * Berjalan langsung di browser HP/PC tanpa membutuhkan server laptop (mcp-server)
  */
 import { DEVICE_KEYS } from "../config/mqtt-contract.js";
 import { DEVICE_DEFINITIONS } from "./devices.js";
+
+// Tempel API Key dari Google AI Studio (sudah dibatasi untuk https://vxzny.github.io/*)
+const GEMINI_API_KEY = "AQ.Ab8RN6KEFMgV8ou9v41O2VGMTq8rFIMCG5jB7YlfSmNOVMgSVg";
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+const SMART_HOME_TOOLS = [
+  {
+    functionDeclarations: [
+      {
+        name: "control_device",
+        description:
+          "Mengontrol satu perangkat Smart Home (lampu1, lampu2, kipas, jemuran, atau pintu).",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            device: {
+              type: "STRING",
+              enum: ["lampu1", "lampu2", "kipas", "jemuran", "pintu"],
+              description: "Nama target perangkat."
+            },
+            action: {
+              type: "STRING",
+              enum: ["ON", "OFF", "OPEN", "CLOSE", "STOP"],
+              description:
+                "Gunakan ON/OFF untuk lampu1, lampu2, kipas. Gunakan OPEN/CLOSE/STOP untuk jemuran. Gunakan OPEN/CLOSE untuk pintu."
+            }
+          },
+          required: ["device", "action"]
+        }
+      },
+      {
+        name: "control_all_devices",
+        description:
+          "Menghidupkan/membuka atau mematikan/menutup seluruh perangkat rumah sekaligus.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            mode: {
+              type: "STRING",
+              enum: ["ON", "OFF"],
+              description: "ON untuk mengaktifkan semua, OFF untuk mematikan semua."
+            }
+          },
+          required: ["mode"]
+        }
+      }
+    ]
+  }
+];
 
 export class VoiceAssistantController {
   constructor({ deviceStore, onExecuteCommand, onRequestDoorConfirm, onNotify }) {
@@ -31,12 +80,7 @@ export class VoiceAssistantController {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
-    if (!SpeechRecognition) {
-      if (this.micBtn) {
-        this.micBtn.title = "Browser ini tidak mendukung pengenalan suara langsung";
-      }
-      return;
-    }
+    if (!SpeechRecognition) return;
 
     this.recognition = new SpeechRecognition();
     this.recognition.lang = "id-ID";
@@ -47,50 +91,39 @@ export class VoiceAssistantController {
     this.recognition.onstart = () => {
       this.isListening = true;
       this.updateListeningUI(true);
-      this.setBannerText("Mendengarkan perintah suara Anda...", "Silakan ucapkan perintah...");
+      this.setBannerText("Mendengarkan perintah suara Anda...", "Silakan bicara...");
     };
 
     this.recognition.onresult = (event) => {
-      let interimTranscript = "";
-      let finalTranscript = "";
+      let interim = "";
+      let finalText = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const text = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += text;
-        } else {
-          interimTranscript += text;
-        }
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText += transcript;
+        else interim += transcript;
       }
 
-      if (interimTranscript && this.transcriptEl) {
-        this.transcriptEl.textContent = `"${interimTranscript}..."`;
+      if (interim && this.transcriptEl) {
+        this.transcriptEl.textContent = `"${interim}..."`;
       }
 
-      if (finalTranscript) {
-        const cleanText = finalTranscript.trim();
-        if (this.transcriptEl) {
-          this.transcriptEl.textContent = `"${cleanText}"`;
-        }
-        this.processVoiceCommand(cleanText);
+      if (finalText) {
+        const cleanText = finalText.trim();
+        if (this.transcriptEl) this.transcriptEl.textContent = `"${cleanText}"`;
+        this.handleUserSpeech(cleanText);
       }
     };
 
     this.recognition.onerror = (event) => {
       this.isListening = false;
       this.updateListeningUI(false);
-
-      let errorMsg = "Gagal menangkap suara.";
-      if (event.error === "not-allowed") {
-        errorMsg = "Izin mikrofon HP ditolak. Aktifkan izin mikrofon di pengaturan browser.";
-      } else if (event.error === "no-speech") {
-        errorMsg = "Suara tidak terdengar. Tekan tombol Suara HP dan coba bicara lagi.";
-      } else if (event.error === "network") {
-        errorMsg = "Gangguan jaringan saat memproses suara.";
-      }
-
-      this.setResponse(errorMsg);
-      this.onNotify?.(errorMsg, "warning");
+      const msg =
+        event.error === "not-allowed"
+          ? "Izin mikrofon ditolak browser. Aktifkan izin mikrofon pada pengaturan situs."
+          : "Suara tidak tertangkap. Tekan tombol Suara HP dan coba lagi.";
+      this.setResponse(msg);
+      this.onNotify?.(msg, "warning");
     };
 
     this.recognition.onend = () => {
@@ -101,9 +134,7 @@ export class VoiceAssistantController {
 
   bindEvents() {
     this.micBtn?.addEventListener("click", () => {
-      if ("speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
       this.toggleListening();
     });
 
@@ -112,22 +143,17 @@ export class VoiceAssistantController {
         const sample = chip.dataset.voiceSample;
         if (this.bannerEl) this.bannerEl.classList.remove("hidden");
         if (this.transcriptEl) this.transcriptEl.textContent = `"${sample}"`;
-        this.processVoiceCommand(sample);
+        this.handleUserSpeech(sample);
       });
     });
   }
 
   toggleListening() {
     if (!this.recognition) {
-      const msg =
-        "Browser HP ini tidak mendukung Web Speech API. Gunakan Google Chrome atau Edge versi terbaru.";
-      this.onNotify?.(msg, "error");
+      this.onNotify?.("Browser tidak mendukung Web Speech API. Gunakan Chrome.", "error");
       return;
     }
-
-    if (this.bannerEl) {
-      this.bannerEl.classList.remove("hidden");
-    }
+    if (this.bannerEl) this.bannerEl.classList.remove("hidden");
 
     if (this.isListening) {
       this.recognition.stop();
@@ -153,7 +179,7 @@ export class VoiceAssistantController {
       this.micBtn.classList.remove("is-listening");
       this.micBtnLabel.textContent = "Suara HP";
       if (this.statusBadgeEl) {
-        this.statusBadgeEl.textContent = "SIAP";
+        this.statusBadgeEl.textContent = "AI SIAP";
         this.statusBadgeEl.className = "badge-pill";
       }
     }
@@ -167,9 +193,7 @@ export class VoiceAssistantController {
 
   setResponse(text, shouldSpeak = false) {
     if (this.responseEl) this.responseEl.textContent = text;
-    if (shouldSpeak) {
-      this.speakIndonesian(text);
-    }
+    if (shouldSpeak) this.speakIndonesian(text);
   }
 
   speakIndonesian(text) {
@@ -178,8 +202,7 @@ export class VoiceAssistantController {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = "id-ID";
-      utterance.rate = 1.02;
-      utterance.pitch = 1.0;
+      utterance.rate = 1.03;
 
       const voices = window.speechSynthesis.getVoices();
       const idVoice = voices.find((v) => v.lang.toLowerCase().includes("id"));
@@ -191,245 +214,181 @@ export class VoiceAssistantController {
     }
   }
 
-  formatIndonesianState(state) {
-    const map = {
-      ON: "dinyalakan",
-      OFF: "dimatikan",
-      OPEN: "dibuka",
-      CLOSED: "ditutup",
-      STOPPED: "dihentikan"
-    };
-    return map[state] || state;
+  buildLiveHomeContext() {
+    const espStatus = this.deviceStore.espAvailable ? "ONLINE" : "OFFLINE";
+    const devicesSummary = DEVICE_KEYS.map((key) => {
+      const dev = this.deviceStore.getDevice(key);
+      return `- ${DEVICE_DEFINITIONS[key].name} (${key}): ${dev.state}`;
+    }).join("\n");
+
+    const tempText = document.getElementById("info-esp-temp")?.textContent || "Belum terbaca";
+
+    return `Status ESP32: ${espStatus}
+Suhu & Kelembapan DHT22: ${tempText}
+Status Perangkat Saat Ini:
+${devicesSummary}`;
   }
 
-  /**
-   * Menerjemahkan kalimat Bahasa Indonesia menjadi aksi kontrol satuan maupun status
-   */
-  processVoiceCommand(rawText) {
-    const text = rawText
-      .toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    const isTurnOn = /\b(nyalakan|hidupkan|aktifkan|on)\b/.test(text);
-    const isTurnOff = /\b(matikan|nonaktifkan|padamkan|off)\b/.test(text);
-    const isOpen = /\b(buka|keluarkan|open)\b/.test(text);
-    const isClose = /\b(tutup|masukkan|kunci|close|lock)\b/.test(text);
-    const isStop = /\b(stop|hentikan|berhenti)\b/.test(text);
-    const isQuery = /\b(status|kondisi|cek|apakah|bagaimana|gimana|berapa)\b/.test(text);
-
-    // 1. Pertanyaan: Cek semua perangkat
-    if (isQuery && /\b(semua|semuanya|seluruh|perangkat|online|sistem)\b/.test(text)) {
-      this.answerAllDevicesStatus();
+  async handleUserSpeech(userText) {
+    // Jika API Key belum diisi, langsung gunakan mode kata kunci lokal
+    if (!GEMINI_API_KEY || GEMINI_API_KEY.includes("TEMPEL_API_KEY")) {
+      this.processLocalFallback(userText);
       return;
     }
 
-    // 2. Pertanyaan: Kondisi Pintu
-    if (isQuery && /\bpintu\b/.test(text)) {
-      this.answerDoorStatus();
-      return;
+    this.setResponse("AI sedang memproses perintah Anda...", false);
+
+    const systemInstruction = `Kamu adalah asisten Smart Home cerdas bernama NEXUS AI yang terintegrasi langsung di dashboard rumah.
+Jawablah pengguna dalam Bahasa Indonesia yang ramah, ringkas, dan natural (maksimal 2 kalimat agar enak didengar lewat speaker HP).
+Gunakan data aktual berikut saat menjawab pertanyaan kondisi rumah:
+${this.buildLiveHomeContext()}
+
+Aturan kontrol:
+- Jika pengguna meminta menyalakan/mematikan/membuka/menutup perangkat (baik perintah langsung maupun tersirat seperti "gerah" -> nyalakan kipas, "mendung/hujan" -> tutup jemuran, "gelap" -> nyalakan lampu), panggil function control_device atau control_all_devices.
+- Jika ESP32 sedang OFFLINE, beritahu pengguna bahwa perangkat fisik sedang tidak terhubung ke internet.`;
+
+    try {
+      const res = await fetch(GEMINI_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          contents: [{ role: "user", parts: [{ text: userText }] }],
+          tools: SMART_HOME_TOOLS,
+          generationConfig: { temperature: 0.3 }
+        })
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+      const functionCalls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
+      const textReply = parts.find((p) => p.text)?.text?.trim();
+
+      if (functionCalls.length > 0) {
+        this.executeAiFunctionCalls(functionCalls, textReply);
+      } else if (textReply) {
+        this.setResponse(textReply, true);
+      } else {
+        this.processLocalFallback(userText);
+      }
+    } catch {
+      // Fallback otomatis ke pengenalan lokal jika API AI gagal dijangkau
+      this.processLocalFallback(userText);
+    }
+  }
+
+  executeAiFunctionCalls(functionCalls, aiTextReply) {
+    const commands = [];
+    let doorAction = null;
+
+    functionCalls.forEach((call) => {
+      if (call.name === "control_all_devices") {
+        const turnOn = call.args?.mode === "ON";
+        commands.push(
+          { device: "lampu1", action: turnOn ? "ON" : "OFF" },
+          { device: "lampu2", action: turnOn ? "ON" : "OFF" },
+          { device: "kipas", action: turnOn ? "ON" : "OFF" },
+          { device: "jemuran", action: turnOn ? "OPEN" : "CLOSE" }
+        );
+        doorAction = turnOn ? "OPEN" : "CLOSE";
+      } else if (call.name === "control_device") {
+        const dev = call.args?.device;
+        const act = call.args?.action;
+        if (dev === "pintu") {
+          doorAction = act === "OPEN" ? "OPEN" : "CLOSE";
+        } else if (DEVICE_KEYS.includes(dev)) {
+          commands.push({ device: dev, action: act });
+        }
+      }
+    });
+
+    if (commands.length > 0) {
+      this.activeBatch = {
+        expected: commands.map((c) => c.device),
+        results: {},
+        customIntro: aiTextReply || null,
+        hasDoorPrompt: Boolean(doorAction)
+      };
+
+      this.setResponse(aiTextReply || "Mengirim perintah AI ke perangkat...", false);
+      commands.forEach((cmd) => {
+        this.onExecuteCommand?.(cmd.device, cmd.action, "hp-voice");
+      });
     }
 
-    // Reset batch sebelum perintah satuan
+    if (doorAction) {
+      if (commands.length === 0) {
+        this.setResponse(
+          aiTextReply || "Permintaan pintu siap. Silakan tekan konfirmasi pada layar.",
+          true
+        );
+      }
+      this.onRequestDoorConfirm?.(doorAction);
+    }
+  }
+
+  processLocalFallback(rawText) {
+    const text = rawText.toLowerCase();
+    const isOn = /\b(nyalakan|hidupkan|aktifkan|on)\b/.test(text);
+    const isOff = /\b(matikan|nonaktifkan|off)\b/.test(text);
+    const isOpen = /\b(buka|open)\b/.test(text);
+    const isClose = /\b(tutup|kunci|close)\b/.test(text);
+
     this.activeBatch = null;
 
-    // 3. Kontrol Satuan: Lampu 1
-    if (/\b(lampu 1|lampu satu|lampu utama)\b/.test(text)) {
-      if (isTurnOn || isOpen) {
-        this.setResponse("Memproses perintah menghidupkan Lampu 1...", false);
-        this.onExecuteCommand?.("lampu1", "ON", "hp-voice");
-        return;
-      }
-      if (isTurnOff || isClose) {
-        this.setResponse("Memproses perintah mematikan Lampu 1...", false);
-        this.onExecuteCommand?.("lampu1", "OFF", "hp-voice");
-        return;
-      }
-    }
-
-    // 4. Kontrol Satuan: Lampu 2
-    if (/\b(lampu 2|lampu dua|lampu kedua)\b/.test(text)) {
-      if (isTurnOn || isOpen) {
-        this.setResponse("Memproses perintah menghidupkan Lampu 2...", false);
-        this.onExecuteCommand?.("lampu2", "ON", "hp-voice");
-        return;
-      }
-      if (isTurnOff || isClose) {
-        this.setResponse("Memproses perintah mematikan Lampu 2...", false);
-        this.onExecuteCommand?.("lampu2", "OFF", "hp-voice");
-        return;
-      }
-    }
-
-    // 5. Kontrol Lampu Umum (jika menyebut "hidupkan lampu" / "matikan lampu" tanpa nomor)
-    if (/\blampu\b/.test(text)) {
-      this.activeBatch = {
-        label: isTurnOn || isOpen ? "Menghidupkan Lampu 1 dan Lampu 2" : "Mematikan Lampu 1 dan Lampu 2",
-        expected: ["lampu1", "lampu2"],
-        results: {}
-      };
-      if (isTurnOn || isOpen) {
-        this.setResponse("Memproses perintah menghidupkan Lampu 1 dan Lampu 2...", false);
-        this.onExecuteCommand?.("lampu1", "ON", "hp-voice");
-        this.onExecuteCommand?.("lampu2", "ON", "hp-voice");
-        return;
-      }
-      if (isTurnOff || isClose) {
-        this.setResponse("Memproses perintah mematikan Lampu 1 dan Lampu 2...", false);
-        this.onExecuteCommand?.("lampu1", "OFF", "hp-voice");
-        this.onExecuteCommand?.("lampu2", "OFF", "hp-voice");
-        return;
-      }
-    }
-
-    // 6. Kontrol Satuan: Kipas Angin
-    if (/\bkipas\b/.test(text)) {
-      if (isTurnOn || isOpen) {
-        this.setResponse("Memproses perintah menghidupkan Kipas Angin...", false);
-        this.onExecuteCommand?.("kipas", "ON", "hp-voice");
-        return;
-      }
-      if (isTurnOff || isClose) {
-        this.setResponse("Memproses perintah mematikan Kipas Angin...", false);
-        this.onExecuteCommand?.("kipas", "OFF", "hp-voice");
-        return;
-      }
-    }
-
-    // 7. Kontrol Satuan: Jemuran Otomatis
-    if (/\bjemuran\b/.test(text)) {
-      if (isStop) {
-        this.setResponse("Memproses perintah menghentikan Jemuran Otomatis...", false);
-        this.onExecuteCommand?.("jemuran", "STOP", "hp-voice");
-        return;
-      }
-      if (isOpen || isTurnOn) {
-        this.setResponse("Memproses perintah membuka Jemuran Otomatis...", false);
-        this.onExecuteCommand?.("jemuran", "OPEN", "hp-voice");
-        return;
-      }
-      if (isClose || isTurnOff) {
-        this.setResponse("Memproses perintah menutup Jemuran Otomatis...", false);
-        this.onExecuteCommand?.("jemuran", "CLOSE", "hp-voice");
-        return;
-      }
-    }
-
-    // 8. Kontrol Satuan: Pintu Utama (melewati dialog konfirmasi keamanan)
-    if (/\bpintu\b/.test(text)) {
-      if (isOpen || isTurnOn) {
-        const msg = "Perintah buka pintu siap. Silakan tekan tombol konfirmasi pada layar.";
-        this.setResponse(msg, true);
-        this.onRequestDoorConfirm?.("OPEN");
-        return;
-      }
-      if (isClose || isTurnOff) {
-        const msg = "Perintah tutup pintu siap. Silakan tekan tombol konfirmasi pada layar.";
-        this.setResponse(msg, true);
-        this.onRequestDoorConfirm?.("CLOSE");
-        return;
-      }
-    }
-
-    // 9. Kontrol Semua Sistem (jika pengguna mengucapkan "hidupkan semua" / "matikan semua")
-    if (/\b(semua|semuanya|seluruh)\b/.test(text)) {
-      const turnOn = isTurnOn || isOpen;
-      const turnOff = isTurnOff || isClose;
-      if (turnOn || turnOff) {
-        this.activeBatch = {
-          label: turnOn ? "Menghidupkan seluruh perangkat" : "Mematikan seluruh perangkat",
-          expected: ["lampu1", "lampu2", "kipas", "jemuran"],
-          results: {}
-        };
-        this.setResponse(
-          turnOn
-            ? "Memproses perintah menghidupkan seluruh perangkat..."
-            : "Memproses perintah mematikan seluruh perangkat...",
-          false
-        );
-        this.onExecuteCommand?.("lampu1", turnOn ? "ON" : "OFF", "hp-voice");
-        this.onExecuteCommand?.("lampu2", turnOn ? "ON" : "OFF", "hp-voice");
-        this.onExecuteCommand?.("kipas", turnOn ? "ON" : "OFF", "hp-voice");
-        this.onExecuteCommand?.("jemuran", turnOn ? "OPEN" : "CLOSE", "hp-voice");
-        this.onRequestDoorConfirm?.(turnOn ? "OPEN" : "CLOSE");
-        return;
-      }
-    }
-
-    const unknownReply = `Perintah "${rawText}" belum dikenali. Contoh: hidupkan lampu 1, matikan kipas, buka jemuran, atau tutup pintu.`;
-    this.setResponse(unknownReply, true);
-  }
-
-  answerDoorStatus() {
-    const door = this.deviceStore.getDevice("pintu");
-    if (!this.deviceStore.espAvailable) {
-      this.setResponse("Perangkat ESP32 sedang offline, status pintu terakhir adalah " + door.state + ".", true);
+    if (/\b(lampu 1|lampu satu)\b/.test(text) && (isOn || isOff)) {
+      this.onExecuteCommand?.("lampu1", isOn ? "ON" : "OFF", "hp-voice");
       return;
     }
-    const statusText =
-      door.state === "OPEN" ? "terbuka" : door.state === "CLOSED" ? "tertutup" : "belum diketahui";
-    const angleText =
-      typeof door.detail?.angle === "number" ? ` dengan posisi servo ${door.detail.angle} derajat` : "";
-    this.setResponse(`Kondisi pintu utama saat ini ${statusText}${angleText}.`, true);
-  }
-
-  answerAllDevicesStatus() {
-    const all = this.deviceStore.getAll();
-    const onlineCount = all.filter((d) => d.online).length;
-
-    if (!this.deviceStore.espAvailable) {
-      this.setResponse("Perangkat ESP32 saat ini sedang offline. Semua 5 perangkat tidak terhubung.", true);
+    if (/\b(lampu 2|lampu dua)\b/.test(text) && (isOn || isOff)) {
+      this.onExecuteCommand?.("lampu2", isOn ? "ON" : "OFF", "hp-voice");
+      return;
+    }
+    if (/\bkipas\b/.test(text) && (isOn || isOff)) {
+      this.onExecuteCommand?.("kipas", isOn ? "ON" : "OFF", "hp-voice");
+      return;
+    }
+    if (/\bjemuran\b/.test(text) && (isOpen || isClose)) {
+      this.onExecuteCommand?.("jemuran", isOpen ? "OPEN" : "CLOSE", "hp-voice");
+      return;
+    }
+    if (/\bpintu\b/.test(text) && (isOpen || isClose)) {
+      this.setResponse("Silakan konfirmasi akses pintu utama di layar.", true);
+      this.onRequestDoorConfirm?.(isOpen ? "OPEN" : "CLOSE");
       return;
     }
 
-    const summaryList = DEVICE_KEYS.map((k) => {
-      const dev = this.deviceStore.getDevice(k);
-      return `${DEVICE_DEFINITIONS[k].name} ${dev.state}`;
-    }).join(", ");
-
-    this.setResponse(
-      `Terdapat ${onlineCount} dari ${all.length} perangkat online. Rincian: ${summaryList}.`,
-      true
-    );
+    this.setResponse("Maaf, perintah tidak dikenali dan koneksi AI sedang tidak tersedia.", true);
   }
 
   handleCommandOutcome({ deviceKey, state, success, isTimeout }) {
     if (this.activeBatch && this.activeBatch.expected.includes(deviceKey)) {
-      this.activeBatch.results[deviceKey] = {
-        success: Boolean(success) && !isTimeout,
-        state: isTimeout ? "TIMEOUT" : state
-      };
-
-      const doneCount = Object.keys(this.activeBatch.results).length;
-      if (doneCount >= this.activeBatch.expected.length) {
+      this.activeBatch.results[deviceKey] = { success: Boolean(success) && !isTimeout, state };
+      if (Object.keys(this.activeBatch.results).length >= this.activeBatch.expected.length) {
         const batch = this.activeBatch;
         this.activeBatch = null;
 
-        const details = batch.expected
+        const summary = batch.expected
           .map((k) => {
             const name = DEVICE_DEFINITIONS[k]?.name || k;
-            const res = batch.results[k];
-            return res.success
-              ? `${name} ${this.formatIndonesianState(res.state)}`
-              : `${name} gagal`;
+            const r = batch.results[k];
+            return r.success ? `${name} ${r.state}` : `${name} gagal`;
           })
           .join(", ");
 
-        this.setResponse(`${batch.label} selesai: ${details}.`, true);
+        const doorNote = batch.hasDoorPrompt ? " Silakan konfirmasi pintu di layar." : "";
+        this.setResponse(`Selesai: ${summary}.${doorNote}`, true);
       }
       return;
     }
 
     const devName = DEVICE_DEFINITIONS[deviceKey]?.name || deviceKey;
     if (isTimeout) {
-      const msg = `Gagal: ESP32 tidak merespons perintah untuk ${devName}.`;
-      this.setResponse(msg, true);
-      return;
-    }
-    if (success) {
-      const msg = `${devName} berhasil ${this.formatIndonesianState(state)}.`;
-      this.setResponse(msg, true);
+      this.setResponse(`Gagal: ESP32 tidak merespons perintah untuk ${devName}.`, true);
+    } else if (success) {
+      this.setResponse(`${devName} berhasil diubah menjadi ${state}.`, true);
     }
   }
 }
