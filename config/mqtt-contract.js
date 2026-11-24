@@ -122,3 +122,8 @@ export function parseAndValidateState(rawPayload) {
     }
   };
 }
+export const DEFAULT_MQTT_CONFIG = {
+  brokerUrl: "lf0d78dd.ala.asia-southeast1.emqxsl.com:8084/mqtt",
+  username: "web_client",
+  password: "web_client"
+};
