@@ -1,12 +1,12 @@
 /**
  * Modul Asisten Suara AI Langsung di Website (Gemini Function Calling + TTS Bahasa Indonesia)
- * API Key disimpan aman di localStorage browser (tidak terekspos di GitHub publik)
+ * Pengunjung langsung bisa memakai mikrofon tanpa perlu memasukkan API Key
  */
 import { DEVICE_KEYS } from "../config/mqtt-contract.js";
 import { DEVICE_DEFINITIONS } from "./devices.js";
 
-const STORAGE_KEY_API = "nexus_gemini_api_key";
-const GEMINI_MODEL = "gemini-2.5-flash";
+// Tempel URL Cloudflare Worker Anda di bawah ini (aman dipublikasikan di GitHub)
+const AI_PROXY_URL = "https://nexus-ai-proxy.euro-smarthome.vinscodex05.workers.dev";
 
 const SMART_HOME_TOOLS = [
   {
@@ -71,73 +71,8 @@ export class VoiceAssistantController {
     this.transcriptEl = document.getElementById("voice-transcript-text");
     this.responseEl = document.getElementById("voice-response-text");
 
-    this.initApiKeyUI();
     this.initSpeechRecognition();
     this.bindEvents();
-  }
-
-  getApiKey() {
-    return (localStorage.getItem(STORAGE_KEY_API) || "").trim();
-  }
-
-  initApiKeyUI() {
-    if (!this.bannerEl) return;
-
-    // Tambahkan tombol kecil "Key AI" di samping badge status
-    if (this.statusBadgeEl && !document.getElementById("btn-ai-key-toggle")) {
-      const keyBtn = document.createElement("button");
-      keyBtn.id = "btn-ai-key-toggle";
-      keyBtn.type = "button";
-      keyBtn.textContent = this.getApiKey() ? "Ganti Key AI" : "Pasang Key AI";
-      keyBtn.style.cssText =
-        "margin-left:8px;padding:3px 10px;font-size:11px;border-radius:999px;border:1px solid #38bdf8;background:rgba(56,189,248,0.12);color:#38bdf8;cursor:pointer;";
-      this.statusBadgeEl.insertAdjacentElement("afterend", keyBtn);
-
-      keyBtn.addEventListener("click", () => this.toggleKeyBox());
-    }
-
-    // Buat kotak input API Key di dalam panel suara (disimpan lokal di browser)
-    const box = document.createElement("div");
-    box.id = "ai-key-setup-box";
-    box.style.cssText =
-      "display:none;margin:10px 0;padding:10px;border-radius:10px;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.35);gap:8px;flex-wrap:wrap;align-items:center;";
-
-    box.innerHTML = `
-      <input id="input-gemini-key" type="password" placeholder="Tempel Gemini API Key (AIzaSy...) di sini"
-        style="flex:1;min-width:200px;padding:8px 10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#f8fafc;font-size:13px;" />
-      <button id="btn-save-gemini-key" type="button"
-        style="padding:8px 14px;border-radius:8px;border:none;background:#0ea5e9;color:#fff;font-weight:600;font-size:13px;cursor:pointer;">
-        Simpan Key
-      </button>
-    `;
-
-    this.bannerEl.appendChild(box);
-
-    if (!this.getApiKey()) {
-      box.style.display = "flex";
-    }
-
-    document.getElementById("btn-save-gemini-key")?.addEventListener("click", () => {
-      const inputEl = document.getElementById("input-gemini-key");
-      const val = (inputEl?.value || "").trim();
-      if (!val.startsWith("AIza")) {
-        this.onNotify?.("Format API Key tidak valid. Pastikan diawali AIza...", "warning");
-        return;
-      }
-      localStorage.setItem(STORAGE_KEY_API, val);
-      inputEl.value = "";
-      box.style.display = "none";
-      const toggleBtn = document.getElementById("btn-ai-key-toggle");
-      if (toggleBtn) toggleBtn.textContent = "Ganti Key AI";
-      this.setResponse("API Key AI tersimpan di browser ini. Silakan tekan Suara HP dan bicara bebas.", true);
-      this.onNotify?.("API Key AI berhasil disimpan!", "success");
-    });
-  }
-
-  toggleKeyBox() {
-    const box = document.getElementById("ai-key-setup-box");
-    if (!box) return;
-    box.style.display = box.style.display === "none" ? "flex" : "none";
   }
 
   initSpeechRecognition() {
@@ -294,18 +229,12 @@ ${devicesSummary}`;
   }
 
   async handleUserSpeech(userText) {
-    const apiKey = this.getApiKey();
-    if (!apiKey) {
-      this.processLocalFallback(
-        userText,
-        "API Key AI belum dipasang (klik tombol Pasang Key AI di atas)."
-      );
+    if (!AI_PROXY_URL || AI_PROXY_URL.includes("TEMPEL_SUBDOMAIN")) {
+      this.processLocalFallback(userText);
       return;
     }
 
     this.setResponse("AI sedang memproses perintah Anda...", false);
-
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
     const systemInstruction = `Kamu adalah asisten Smart Home cerdas bernama NEXUS AI yang terintegrasi langsung di dashboard rumah.
 Jawablah pengguna dalam Bahasa Indonesia yang ramah, ringkas, dan natural (maksimal 2 kalimat agar enak didengar lewat speaker HP).
@@ -317,7 +246,7 @@ Aturan kontrol:
 - Jika ESP32 sedang OFFLINE, beritahu pengguna bahwa perangkat fisik sedang tidak terhubung ke internet.`;
 
     try {
-      const res = await fetch(endpoint, {
+      const res = await fetch(AI_PROXY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -328,11 +257,7 @@ Aturan kontrol:
         })
       });
 
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        const reason = errJson?.error?.message || `HTTP ${res.status}`;
-        throw new Error(reason);
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data = await res.json();
       const parts = data?.candidates?.[0]?.content?.parts || [];
@@ -346,8 +271,8 @@ Aturan kontrol:
       } else {
         this.processLocalFallback(userText);
       }
-    } catch (err) {
-      this.processLocalFallback(userText, `AI error: ${err.message}`);
+    } catch {
+      this.processLocalFallback(userText);
     }
   }
 
@@ -401,9 +326,8 @@ Aturan kontrol:
     }
   }
 
-  processLocalFallback(rawText, aiErrorNote = "") {
+  processLocalFallback(rawText) {
     const text = rawText.toLowerCase();
-    // Mendukung kata dasar maupun kata berimbuhan (menyalakan, mematikan, membuka, menutup)
     const isOn = /(nyalakan|hidupkan|aktifkan|\bon\b)/.test(text);
     const isOff = /(matikan|nonaktifkan|\boff\b)/.test(text);
     const isOpen = /(buka|\bopen\b)/.test(text);
@@ -433,8 +357,7 @@ Aturan kontrol:
       return;
     }
 
-    const detail = aiErrorNote ? ` (${aiErrorNote})` : "";
-    this.setResponse(`Perintah belum dipahami${detail}.`, true);
+    this.setResponse("Maaf, perintah belum dipahami. Coba ucapkan kembali.", true);
   }
 
   handleCommandOutcome({ deviceKey, state, success, isTimeout }) {
