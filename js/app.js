@@ -1,11 +1,47 @@
 /**
  * Entry Point Utama Aplikasi Smart Home Dashboard (Manual Web + Voice HP + XiaoZhi MCP)
  */
+import { DEFAULT_MQTT_CONFIG } from "../config/mqtt-contract.js";
 import { DeviceStore, DEVICE_DEFINITIONS } from "./devices.js";
 import { NotificationManager } from "./notifications.js";
 import { DashboardUI } from "./dashboard.js";
 import { MqttService } from "./mqtt.js";
 import { VoiceAssistantController } from "./voice.js";
+
+/**
+ * Mengambil konfigurasi MQTT dari localStorage jika tersedia,
+ * atau otomatis memakai DEFAULT_MQTT_CONFIG dari config/mqtt-contract.js pada perangkat baru.
+ */
+function resolveStartupMqttConfig(currentConfig = {}) {
+  if (currentConfig?.host && currentConfig?.password) {
+    return currentConfig;
+  }
+
+  let parsedHost = DEFAULT_MQTT_CONFIG?.host || "";
+  let parsedPort = DEFAULT_MQTT_CONFIG?.port || 8084;
+  let parsedPath = DEFAULT_MQTT_CONFIG?.path || "/mqtt";
+
+  if (DEFAULT_MQTT_CONFIG?.brokerUrl) {
+    try {
+      const url = new URL(DEFAULT_MQTT_CONFIG.brokerUrl);
+      parsedHost = url.hostname;
+      parsedPort = Number(url.port) || 8084;
+      parsedPath = url.pathname || "/mqtt";
+    } catch {
+      // Abaikan jika format URL tidak standar
+    }
+  }
+
+  return {
+    ...currentConfig,
+    brokerUrl: DEFAULT_MQTT_CONFIG?.brokerUrl || "",
+    host: parsedHost,
+    port: parsedPort,
+    path: parsedPath,
+    username: DEFAULT_MQTT_CONFIG?.username || currentConfig?.username || "",
+    password: DEFAULT_MQTT_CONFIG?.password || currentConfig?.password || ""
+  };
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   const notifier = new NotificationManager();
@@ -154,7 +190,10 @@ document.addEventListener("DOMContentLoaded", () => {
     notifier.clearActivities();
   });
 
-  if (mqttService.config?.host && mqttService.config?.password) {
-    mqttService.connect(mqttService.config);
+  // Otomatis sambungkan ke MQTT Broker menggunakan konfigurasi tersimpan atau default
+  const startupConfig = resolveStartupMqttConfig(mqttService.config);
+  if (startupConfig?.host && startupConfig?.password) {
+    mqttService.config = startupConfig;
+    mqttService.connect(startupConfig);
   }
 });
