@@ -1,12 +1,13 @@
 /**
- * FIRMWARE SMART HOME ESP32-WROOM-32E (MQTT OVER TLS + XIAOZHI MCP READY)
- * Mendukung:
- * - 2x Servo (Pintu Utama & Jemuran Otomatis)
- * - Relay Active-HIGH (Kipas 12V)
- * - AC TRIAC/Switch ON-OFF (Lampu 1) & LED/Relay (Lampu 2)
- * - Tombol Fisik dengan Debounce & Sinkronisasi State Real-Time
- * - Sensor DHT22 & Telemetri Wi-Fi RSSI
- * - Last Will & Testament (LWT) + Auto-Reconnect Non-Blocking
+- FIRMWARE SMART HOME ESP32-WROOM-32E (MQTT OVER TLS + XIAOZHI MCP READY)
+- Mendukung:
+- - 2x Servo (Pintu Utama & Jemuran Otomatis)
+- - Relay Active-HIGH (Kipas 12V) + Otomatisasi Suhu DHT22
+- - Otomatisasi Jemuran Tertutup Saat Hujan (Sensor Hujan)
+- - AC TRIAC/Switch ON-OFF (Lampu 1) & LED/Relay (Lampu 2)
+- - Tombol Fisik dengan Debounce & Sinkronisasi State Real-Time
+- - Sensor DHT22 & Telemetri Wi-Fi RSSI
+- - Last Will & Testament (LWT) + Auto-Reconnect Non-Blocking
  */
 
 #include <WiFi.h>
@@ -32,6 +33,7 @@
 #define PIN_LAMPU_1_GATE    21  // [TEMPLATE] Pin Gate/PWM Modul AC Lampu 1 (ON/OFF)
 #define PIN_LAMPU_1_ZC      19  // [TEMPLATE] Pin Zero-Cross Modul AC (cadangan input)
 #define PIN_TOMBOL_FISIK    33  // [TEMPLATE] Pin Tombol Fisik (kiri atas rangkaian)
+#define PIN_SENSOR_HUJAN    34  // [TEMPLATE] Pin DO Modul Sensor Hujan (Input-Only, Active-LOW)
 
 // =========================================================================
 // 2. KONFIGURASI KALIBRASI SERVO, RELAY, & SENSOR
@@ -48,9 +50,14 @@ const int JEMURAN_SUDUT_BUKA  = 120;
 const uint8_t RELAY_ON_LEVEL  = HIGH;
 const uint8_t RELAY_OFF_LEVEL = LOW;
 
-// Aktifkan pembacaan DHT22 (ubah ke false jika sensor belum dipasang saat tes)
-#define ENABLE_DHT22 true
-#define DHT_TYPE     DHT22
+// Aktifkan pembacaan sensor (ubah ke false jika sensor belum dipasang saat tes)
+#define ENABLE_DHT22        true
+#define ENABLE_RAIN_SENSOR  true
+#define DHT_TYPE            DHT22
+
+// Batas Otomatisasi Suhu Kipas (dengan Histeresis 2°C agar relay tidak cetak-cetek)
+const float SUHU_KIPAS_NYALA = 30.0; // Kipas otomatis ON jika suhu >= 30.0 °C
+const float SUHU_KIPAS_MATI  = 28.0; // Kipas otomatis OFF jika suhu <= 28.0 °C
 
 // =========================================================================
 // 3. DAFTAR TOPIC MQTT (KONTRAK SISTEM)
@@ -97,6 +104,17 @@ int stableButtonState = HIGH;
 unsigned long lastDebounceTime = 0;
 const unsigned long DEBOUNCE_DELAY_MS = 50;
 
+// Variabel Otomatisasi Sensor Hujan & Suhu DHT22
+bool isRainingConfirmed = false;
+bool rawRainReading     = false;
+unsigned long lastRainDebounceTime = 0;
+const unsigned long RAIN_DEBOUNCE_MS = 2000; // Tahan 2 detik agar tidak salah picu percikan air
+
+unsigned long lastDhtCheckTime = 0;
+const unsigned long DHT_CHECK_INTERVAL_MS = 2500; // Cek suhu tiap 2,5 detik
+bool manualFanOnLock  = false; // Mengunci perintah manual ON dari Web/XiaoZhi
+bool manualFanOffLock = false; // Mengunci perintah manual OFF dari Web/XiaoZhi
+
 // =========================================================================
 // 5. FUNGSI UTILITAS WAKTU & PUBLISH STATUS AKTUAL
 // =========================================================================
@@ -131,6 +149,9 @@ void publishDeviceState(const char* topic, const char* device, const String& sta
   if (motorStatus != nullptr) {
     detail["motor"] = motorStatus;
   }
+  if (strcmp(device, "jemuran") == 0 && ENABLE_RAIN_SENSOR) {
+    detail["raining"] = isRainingConfirmed;
+  }
 
   char buffer[384];
   size_t len = serializeJson(doc, buffer, sizeof(buffer));
@@ -160,6 +181,10 @@ void publishSystemTelemetry() {
   doc["freeHeap"]  = ESP.getFreeHeap();
   doc["timestamp"] = getUnixTimestamp();
 
+  if (ENABLE_RAIN_SENSOR) {
+    doc["raining"] = isRainingConfirmed;
+  }
+
   if (ENABLE_DHT22) {
     float t = dht.readTemperature();
     float h = dht.readHumidity();
@@ -179,6 +204,16 @@ void publishSystemTelemetry() {
 // =========================================================================
 void executeJemuran(const String& action, const String& source, const String& reqId) {
   if (action == "OPEN") {
+    // Proteksi hujan: jika sedang hujan, tahan posisi tertutup & tetap balas reqId agar Web/XiaoZhi tidak timeout
+    if (ENABLE_RAIN_SENSOR && isRainingConfirmed) {
+      Serial.println("[RAIN GUARD] Perintah OPEN ditahan karena terdeteksi HUJAN.");
+      servoJemuran.write(JEMURAN_SUDUT_TUTUP);
+      angleJemuran = JEMURAN_SUDUT_TUTUP;
+      stateJemuran = "CLOSED";
+      publishDeviceState(TOPIC_JEMURAN_STATE, "jemuran", stateJemuran, "sensor-hujan", reqId, angleJemuran, "STANDBY");
+      return;
+    }
+
     publishDeviceState(TOPIC_JEMURAN_STATE, "jemuran", "MOVING", source.c_str(), reqId, angleJemuran, "BERGERAK");
     servoJemuran.write(JEMURAN_SUDUT_BUKA);
     delay(350); // Waktu singkat mekanik servo mencapai sudut target
@@ -198,14 +233,22 @@ void executeJemuran(const String& action, const String& source, const String& re
   }
 }
 
-void executeKipas(const String& action, const String& source, const String& reqId) {
+void executeKipas(const String& action, const String& source, const String& reqId, bool isManual = false) {
   if (action == "ON") {
     digitalWrite(PIN_RELAY_KIPAS, RELAY_ON_LEVEL);
     stateKipas = "ON";
+    if (isManual) {
+      manualFanOnLock  = true;
+      manualFanOffLock = false;
+    }
     publishDeviceState(TOPIC_KIPAS_STATE, "kipas", stateKipas, source.c_str(), reqId);
   } else if (action == "OFF") {
     digitalWrite(PIN_RELAY_KIPAS, RELAY_OFF_LEVEL);
     stateKipas = "OFF";
+    if (isManual) {
+      manualFanOffLock = true;
+      manualFanOnLock  = false;
+    }
     publishDeviceState(TOPIC_KIPAS_STATE, "kipas", stateKipas, source.c_str(), reqId);
   }
 }
@@ -282,7 +325,7 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   if (topicStr == "smarthome/jemuran/command" && device == "jemuran") {
     executeJemuran(action, source, reqId);
   } else if (topicStr == "smarthome/kipas/command" && device == "kipas") {
-    executeKipas(action, source, reqId);
+    executeKipas(action, source, reqId, true);
   } else if (topicStr == "smarthome/lampu1/command" && device == "lampu1") {
     executeLampu1(action, source, reqId);
   } else if (topicStr == "smarthome/lampu2/command" && device == "lampu2") {
@@ -295,7 +338,7 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
 }
 
 // =========================================================================
-// 8. PENANGANAN TOMBOL FISIK LOKAL (SINKRON KE DASHBOARD)
+// 8. PENANGANAN TOMBOL FISIK & OTOMATISASI SENSOR LOKAL
 // =========================================================================
 void handlePhysicalButton() {
   int reading = digitalRead(PIN_TOMBOL_FISIK);
@@ -317,6 +360,57 @@ void handlePhysicalButton() {
     }
   }
   lastButtonReading = reading;
+}
+
+void handleRainSensorAutomation() {
+  if (!ENABLE_RAIN_SENSOR) return;
+
+  // Modul sensor hujan umumnya Active-LOW (LOW = terdeteksi air hujan, HIGH = kering)
+  bool currentWet = (digitalRead(PIN_SENSOR_HUJAN) == LOW);
+
+  if (currentWet != rawRainReading) {
+    rawRainReading = currentWet;
+    lastRainDebounceTime = millis();
+  }
+
+  if ((millis() - lastRainDebounceTime) >= RAIN_DEBOUNCE_MS) {
+    if (isRainingConfirmed != rawRainReading) {
+      isRainingConfirmed = rawRainReading;
+      Serial.printf("[RAIN SENSOR] Kondisi berubah -> %s\n", isRainingConfirmed ? "HUJAN" : "KERING");
+
+      if (isRainingConfirmed && stateJemuran != "CLOSED") {
+        Serial.println("[AUTO JEMURAN] Hujan terdeteksi! Menutup jemuran otomatis...");
+        executeJemuran("CLOSE", "sensor-hujan", "");
+      }
+      publishSystemTelemetry();
+    }
+  }
+}
+
+void handleDht22FanAutomation() {
+  if (!ENABLE_DHT22) return;
+  if (millis() - lastDhtCheckTime < DHT_CHECK_INTERVAL_MS) return;
+  lastDhtCheckTime = millis();
+
+  float t = dht.readTemperature();
+  if (isnan(t)) return;
+
+  // Buka kembali kunci override manual saat suhu kembali bergerak melewati titik tengah
+  if (t < (SUHU_KIPAS_NYALA - 0.5)) {
+    manualFanOffLock = false;
+  }
+  if (t > (SUHU_KIPAS_MATI + 0.5)) {
+    manualFanOnLock = false;
+  }
+
+  // Otomatisasi Kipas Berdasarkan Batas Suhu
+  if (t >= SUHU_KIPAS_NYALA && stateKipas != "ON" && !manualFanOffLock) {
+    Serial.printf("[AUTO KIPAS] Suhu %.1f°C >= %.1f°C -> Kipas ON otomatis\n", t, SUHU_KIPAS_NYALA);
+    executeKipas("ON", "sensor-dht22", "", false);
+  } else if (t <= SUHU_KIPAS_MATI && stateKipas != "OFF" && !manualFanOnLock) {
+    Serial.printf("[AUTO KIPAS] Suhu %.1f°C <= %.1f°C -> Kipas OFF otomatis\n", t, SUHU_KIPAS_MATI);
+    executeKipas("OFF", "sensor-dht22", "", false);
+  }
 }
 
 // =========================================================================
@@ -405,6 +499,9 @@ void setup() {
   // Tombol fisik menggunakan internal pull-up (sambungkan tombol ke GPIO & GND)
   pinMode(PIN_TOMBOL_FISIK, INPUT_PULLUP);
 
+  // Sensor hujan pin DO (GPIO 34 adalah pin input-only tanpa internal pull-up)
+  pinMode(PIN_SENSOR_HUJAN, INPUT);
+
   // Inisialisasi 2 Servo pada posisi awal tertutup
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
@@ -451,8 +548,10 @@ void loop() {
     mqttClient.loop();
   }
 
-  // Pantau tombol fisik setiap siklus loop
+  // Pantau tombol fisik & otomatisasi sensor lokal setiap siklus loop
   handlePhysicalButton();
+  handleRainSensorAutomation();
+  handleDht22FanAutomation();
 
   // Kirim telemetri sistem berkala setiap 10 detik
   if (mqttClient.connected() && (millis() - lastTelemetryPublish > TELEMETRY_INTERVAL_MS)) {
