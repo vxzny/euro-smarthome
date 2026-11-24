@@ -1,5 +1,5 @@
-#ifndef SECRETS_H
-#define SECRETS_H
+#ifndef secret_h
+#define secret_h
 
 // ==========================================
 // 1. KONFIGURASI WI-FI (2.4 GHz)
@@ -15,8 +15,8 @@ const char* MQTT_BROKER   = "xxxxxxxx.ala.asia-southeast1.emqxsl.com";
 const int   MQTT_PORT     = 8883;
 
 // Kredensial khusus ESP32 dari menu Authentication EMQX Cloud
-const char* MQTT_USER     = "esp32_controller";
-const char* MQTT_PASS     = "PASSWORD_ESP32_CONTROLLER_ANDA";
+const char* MQTT_USER     = "esp32";
+const char* MQTT_PASS     = "esp32";
 
 // Client ID harus unik (dan sama dengan ACL jika ACL memakai Client ID)
 const char* MQTT_CLIENT_ID = "esp32-smarthome-01";
