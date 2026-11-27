@@ -20,6 +20,17 @@ export class MqttService {
     this.manualDisconnect = false;
     this.config = this.loadConfig();
   }
+  publishTts(text) {
+    if (!this.client || !this.connected || !text) return;
+    const cleanText = String(text).trim().slice(0, 180);
+    if (!cleanText) return;
+
+    this.client.publish(
+      "smarthome/system/tts",
+      JSON.stringify({ text: cleanText }),
+      { qos: 1, retain: false }
+    );
+  }
 
   loadConfig() {
     try {
