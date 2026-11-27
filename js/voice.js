@@ -59,6 +59,7 @@ export class VoiceAssistantController {
     this.onExecuteCommand = onExecuteCommand;
     this.onRequestDoorConfirm = onRequestDoorConfirm;
     this.onNotify = onNotify;
+    this.onSpeakText = onSpeakText;
 
     this.isListening = false;
     this.recognition = null;
@@ -196,6 +197,8 @@ export class VoiceAssistantController {
   }
 
   speakIndonesian(text) {
+    this.onSpeakText?.(text);
+    
     if (!("speechSynthesis" in window)) return;
     try {
       window.speechSynthesis.cancel();
