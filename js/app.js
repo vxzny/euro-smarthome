@@ -1,5 +1,5 @@
 /**
- * Entry Point Utama Aplikasi Smart Home Dashboard (Manual Web + Voice HP + XiaoZhi MCP)
+ * Entry Point Utama Aplikasi Smart Home Dashboard (Manual Web + Voice HP + Speaker MAX98357A)
  */
 import { DEFAULT_MQTT_CONFIG } from "../config/mqtt-contract.js";
 import { DeviceStore, DEVICE_DEFINITIONS } from "./devices.js";
@@ -8,10 +8,6 @@ import { DashboardUI } from "./dashboard.js";
 import { MqttService } from "./mqtt.js";
 import { VoiceAssistantController } from "./voice.js";
 
-/**
- * Mengambil konfigurasi MQTT dari localStorage jika tersedia,
- * atau otomatis memakai DEFAULT_MQTT_CONFIG dari config/mqtt-contract.js pada perangkat baru.
- */
 function resolveStartupMqttConfig(currentConfig = {}) {
   if (currentConfig?.host && currentConfig?.password) {
     return currentConfig;
@@ -81,8 +77,12 @@ document.addEventListener("DOMContentLoaded", () => {
         notifier.updateCommandStatus(stateData.requestId, "CONFIRMED");
       }
       if (result?.wasConfirmed) {
-        notifier.showToast(`${devName} berhasil diubah ke ${stateData.state}`, "success");
-        if (result.pendingSource === "hp-voice" || stateData.source === "hp-voice") {
+        const confirmMsg = `${devName} berhasil diubah ke ${stateData.state}`;
+        notifier.showToast(confirmMsg, "success");
+
+        if (result.pendingSource === "web") {
+          mqttService.publishTts?.(confirmMsg);
+        } else if (result.pendingSource === "hp-voice" || stateData.source === "hp-voice") {
           voiceController?.handleCommandOutcome({
             deviceKey: stateData.device,
             state: stateData.state,
@@ -173,13 +173,14 @@ document.addEventListener("DOMContentLoaded", () => {
     },
     onNotify: (msg, type) => {
       notifier.showToast(msg, type);
+    },
+    onSpeakText: (text) => {
+      mqttService.publishTts?.(text);
     }
   });
 
-  // Render awal seluruh kartu perangkat
   ui.renderDevices(deviceStore.getAll(), false);
 
-  // Event tombol header & log
   document.getElementById("btn-open-settings")?.addEventListener("click", () => {
     ui.openSettingsModal(mqttService.config);
   });
@@ -190,7 +191,6 @@ document.addEventListener("DOMContentLoaded", () => {
     notifier.clearActivities();
   });
 
-  // Otomatis sambungkan ke MQTT Broker menggunakan konfigurasi tersimpan atau default
   const startupConfig = resolveStartupMqttConfig(mqttService.config);
   if (startupConfig?.host && startupConfig?.password) {
     mqttService.config = startupConfig;
