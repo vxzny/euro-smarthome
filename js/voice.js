@@ -54,7 +54,7 @@ const SMART_HOME_TOOLS = [
 ];
 
 export class VoiceAssistantController {
-  constructor({ deviceStore, onExecuteCommand, onRequestDoorConfirm, onNotify }) {
+  constructor({ deviceStore, onExecuteCommand, onRequestDoorConfirm, onNotify, onSpeakText }) {
     this.deviceStore = deviceStore;
     this.onExecuteCommand = onExecuteCommand;
     this.onRequestDoorConfirm = onRequestDoorConfirm;
