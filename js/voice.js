@@ -259,7 +259,8 @@ FORMAT OUTPUT WAJIB JSON MURNI:
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        const errDetail = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errDetail.slice(0, 120)}`);
       }
 
       const data = await response.json();
