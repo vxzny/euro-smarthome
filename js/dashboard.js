@@ -204,6 +204,43 @@ export class DashboardUI {
           })
           .join("");
 
+        const brightnessVal = typeof dev.brightness === "number" ? dev.brightness : 0;
+        const dimmerDisabledAttr = !mqttConnected || isBusy ? "disabled" : "";
+        const dimmerHtml = dev.hasDimmer
+          ? `
+            <div class="dimmer-control">
+              <div class="dimmer-header">
+                <span>Intensitas Cahaya (PWM)</span>
+                <span id="dimmer-val-${dev.key}" class="dimmer-value">${brightnessVal}%</span>
+              </div>
+              <input
+                type="range"
+                class="dimmer-slider"
+                data-dimmer-device="${dev.key}"
+                min="0"
+                max="100"
+                value="${brightnessVal}"
+                ${dimmerDisabledAttr}
+              />
+              <div class="dimmer-presets">
+                ${[25, 50, 75, 100]
+                  .map(
+                    (pct) => `
+                  <button
+                    type="button"
+                    class="dimmer-preset-btn ${brightnessVal === pct && isActiveState ? "is-selected" : ""}"
+                    data-dimmer-preset="${dev.key}"
+                    data-brightness="${pct}"
+                    ${dimmerDisabledAttr}
+                  >${pct}%</button>
+                `
+                  )
+                  .join("")}
+              </div>
+            </div>
+          `
+          : "";
+
         return `
           <article class="device-card ${isActiveState && dev.online ? "is-active" : ""}">
             <div class="device-card-top">
@@ -222,7 +259,9 @@ export class DashboardUI {
             <div class="device-state-box">
               <div class="state-main-row">
                 <span class="state-label">Status Aktual</span>
-                <span class="state-value ${stateClass}">${dev.state}</span>
+                <span class="state-value ${stateClass}">
+                  ${dev.hasDimmer && isActiveState ? `${dev.state} (${brightnessVal}%)` : dev.state}
+                </span>
               </div>
               <span class="device-subdetail">${subdetail}</span>
             </div>
@@ -230,6 +269,8 @@ export class DashboardUI {
             <div class="${controlsClass}">
               ${buttonsHtml}
             </div>
+
+            ${dimmerHtml}
 
             <div class="device-footer">
               <span>${isBusy ? "Menunggu konfirmasi ESP32..." : "Siap"}</span>
@@ -240,6 +281,7 @@ export class DashboardUI {
       })
       .join("");
 
+    // Bind tombol ON / OFF / OPEN / CLOSE / STOP
     this.devicesGrid.querySelectorAll("button[data-device]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const device = btn.dataset.device;
@@ -251,10 +293,42 @@ export class DashboardUI {
         }
       });
     });
+
+    // Bind slider kecerahan AC Dimmer (Lampu 1)
+    this.devicesGrid.querySelectorAll("input[data-dimmer-device]").forEach((slider) => {
+      const device = slider.dataset.dimmerDevice;
+      const labelEl = document.getElementById(`dimmer-val-${device}`);
+
+      slider.addEventListener("input", () => {
+        if (labelEl) labelEl.textContent = `${slider.value}%`;
+      });
+
+      slider.addEventListener("change", () => {
+        const brightness = Number(slider.value);
+        this.onDeviceAction?.(device, "SET_BRIGHTNESS", { brightness });
+      });
+    });
+
+    // Bind tombol preset kecerahan (25%, 50%, 75%, 100%)
+    this.devicesGrid.querySelectorAll("button[data-dimmer-preset]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const device = btn.dataset.dimmerPreset;
+        const brightness = Number(btn.dataset.brightness);
+        this.onDeviceAction?.(device, "SET_BRIGHTNESS", { brightness });
+      });
+    });
   }
 
   formatDeviceSubdetail(dev) {
     const d = dev.detail || {};
+    if (dev.key === "lampu1") {
+      const pct = typeof dev.brightness === "number" ? dev.brightness : 0;
+      const pwm = typeof d.pwm === "number" ? d.pwm : Math.round((pct / 100) * 255);
+      return `AC Light Dimmer • Kecerahan: ${pct}% (PWM ${pwm}/255)`;
+    }
+    if (dev.key === "lampu2") {
+      return `Relay CH2 (4 LED Paralel) • ${dev.online ? "Terhubung (QoS 1)" : "Menunggu ESP32"}`;
+    }
     if (dev.key === "jemuran") {
       const motor = d.motor || (dev.state === "MOVING" ? "BERGERAK" : "STANDBY");
       const sensor = d.rain ? `Hujan: ${d.rain}` : "Aktuator Siap";
@@ -270,7 +344,7 @@ export class DashboardUI {
           : dev.state;
       return `Aktuator: Motor Servo • Posisi: ${posisi}`;
     }
-    return `Koneksi Node: ${dev.online ? "Terhubung (QoS 1)" : "Menunggu ESP32"}`;
+    return `Relay CH1 • ${dev.online ? "Terhubung (QoS 1)" : "Menunggu ESP32"}`;
   }
 
   openDoorModal(action) {
