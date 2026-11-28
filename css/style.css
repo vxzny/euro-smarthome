@@ -937,3 +937,69 @@ body {
     grid-template-columns: 1fr;
   }
 }
+/* AC LIGHT DIMMER SLIDER & PRESETS (LAMPU 1) */
+.dimmer-control {
+  background: var(--bg-navy-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.dimmer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.dimmer-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: #fbbf24;
+}
+
+.dimmer-slider {
+  width: 100%;
+  accent-color: #f59e0b;
+  cursor: pointer;
+}
+
+.dimmer-slider:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dimmer-presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.4rem;
+}
+
+.dimmer-preset-btn {
+  background: var(--bg-navy);
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 0.25rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.dimmer-preset-btn:hover:not(:disabled),
+.dimmer-preset-btn.is-selected {
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.dimmer-preset-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
