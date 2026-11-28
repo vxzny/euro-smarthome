@@ -20,6 +20,7 @@ export class MqttService {
     this.manualDisconnect = false;
     this.config = this.loadConfig();
   }
+
   publishTts(text) {
     if (!this.client || !this.connected || !text) return;
     const cleanText = String(text).trim().slice(0, 180);
@@ -186,12 +187,12 @@ export class MqttService {
     this.callbacks.onStatusChange?.("DISCONNECTED", this.config?.host || "");
   }
 
-  publishCommand(device, action, source = "web") {
+  publishCommand(device, action, source = "web", extraPayload = {}) {
     if (!this.connected || !this.client) {
       throw new Error("MQTT Broker belum terhubung. Klik tombol 'Broker WSS' untuk menghubungkan.");
     }
 
-    const payloadObj = buildCommandPayload(device, action, source);
+    const payloadObj = buildCommandPayload(device, action, source, extraPayload);
     const topic = TOPICS.devices[device].command;
 
     this.client.publish(
