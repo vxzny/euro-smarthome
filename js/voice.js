@@ -1,6 +1,6 @@
 /**
  * VoiceAssistantController - Asisten Suara Cerdas Ala Siri (Gemini 2.5 Flash)
- * Mendukung percakapan bebas multi-turn, tanya jawab umum, dan kontrol Smart Home real-time.
+ * Mendukung percakapan bebas multi-turn, tanya jawab umum, dan kontrol Smart Home + AC Dimmer real-time.
  */
 import { DEVICE_DEFINITIONS } from "./devices.js";
 
@@ -28,6 +28,7 @@ export class VoiceAssistantController {
 
   cacheDomElements() {
     this.btnVoice =
+      document.getElementById("btn-voice-toggle") ||
       document.getElementById("btn-voice-hp") ||
       document.getElementById("btn-hp-voice") ||
       document.getElementById("btn-voice") ||
@@ -40,10 +41,12 @@ export class VoiceAssistantController {
       document.getElementById("voice-status");
 
     this.transcriptEl =
+      document.getElementById("voice-transcript-text") ||
       document.getElementById("voice-transcript") ||
       document.getElementById("detected-command");
 
     this.responseEl =
+      document.getElementById("voice-response-text") ||
       document.getElementById("voice-response") ||
       document.getElementById("system-response");
   }
@@ -58,16 +61,19 @@ export class VoiceAssistantController {
     });
 
     // Mendukung klik tombol chip contoh perintah di dashboard
-    document.querySelectorAll("[data-voice-command], .voice-chip, .quick-voice-btn").forEach((chip) => {
-      chip.addEventListener("click", () => {
-        const cmdText =
-          chip.getAttribute("data-voice-command") ||
-          chip.textContent.replace(/^["']|["']$/g, "").trim();
-        if (cmdText) {
-          this.processUserSpeech(cmdText);
-        }
+    document
+      .querySelectorAll("[data-voice-sample], [data-voice-command], .voice-chip, .quick-voice-btn")
+      .forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const cmdText =
+            chip.getAttribute("data-voice-sample") ||
+            chip.getAttribute("data-voice-command") ||
+            chip.textContent.replace(/^["']|["']$/g, "").trim();
+          if (cmdText) {
+            this.processUserSpeech(cmdText);
+          }
+        });
       });
-    });
   }
 
   initSpeechRecognition() {
@@ -125,7 +131,6 @@ export class VoiceAssistantController {
     }
     if (this.isProcessing) return;
 
-    // Hentikan suara TTS yang sedang berbicara agar tidak masuk ke mikrofon
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
@@ -161,8 +166,7 @@ export class VoiceAssistantController {
   }
 
   /**
-   * Mengumpulkan kondisi terkini rumah (status 5 perangkat + telemetri sensor)
-   * agar Gemini bisa menjawab pertanyaan status seperti Siri.
+   * Mengumpulkan kondisi terkini rumah (status 5 perangkat + kecerahan Lampu 1 + telemetri sensor)
    */
   buildHouseContext() {
     const rawDevices = this.deviceStore?.getAll?.() || {};
@@ -171,6 +175,9 @@ export class VoiceAssistantController {
     const statusLines = list.map((d) => {
       const key = d.key || d.id || d.device;
       const name = DEVICE_DEFINITIONS[key]?.name || d.name || key;
+      if (key === "lampu1" && typeof d.brightness === "number") {
+        return `- ${name} (${key}): ${d.state || "UNKNOWN"} (Kecerahan saat ini: ${d.brightness}%)`;
+      }
       return `- ${name} (${key}): ${d.state || "UNKNOWN"}`;
     });
 
@@ -203,14 +210,18 @@ Waktu saat ini: ${nowStr}.
 ${this.buildHouseContext()}
 
 ATURAN PERILAKU & RESPON:
-1. Kamu BISA diajak mengobrol apa saja di luar topik Smart Home: menyapa balik (misal "Hai juga! Ada yang bisa saya bantu?"), bercanda ringan, menjawab pengetahuan umum, berhitung, memberi saran, atau menanyakan kabar.
+1. Kamu BISA diajak mengobrol apa saja di luar topik Smart Home: menyapa balik, bercanda ringan, menjawab pengetahuan umum, berhitung, memberi saran, atau menanyakan kabar.
 2. Jika pengguna meminta mengontrol perangkat rumah, sertakan daftar aksinya di dalam array "commands". Pemetaan device & action yang valid HANYA:
-   - "lampu1" (Lampu 1 / Lampu Utama): "ON" atau "OFF"
-   - "lampu2" (Lampu 2 / Lampu LED): "ON" atau "OFF"
+   - "lampu1" (Lampu 1 / Lampu Pijar AC Dimmer):
+     * "ON" atau "OFF"
+     * "SET_BRIGHTNESS" wajib disertai angka "brightness" (integer 0 sampai 100) jika pengguna menyebut persentase kecerahan tertentu (contoh: "turunkan kecerahan lampu 1 ke 25%", "naikkan ke 75%", "atur lampu 1 40%").
+     * "DIM" jika pengguna meminta meredupkan lampu 1 tanpa menyebut angka.
+     * "BRIGHTEN" jika pengguna meminta menerangkan lampu 1 tanpa menyebut angka.
+   - "lampu2" (Lampu 2 / 4 Lampu LED): "ON" atau "OFF"
    - "kipas" (Kipas Angin): "ON" atau "OFF"
    - "jemuran" (Jemuran Otomatis): "OPEN", "CLOSE", atau "STOP"
    - "pintu" (Pintu Utama): "OPEN" atau "CLOSE"
-3. Jika pengguna hanya mengobrol biasa atau sekadar bertanya status (tanpa menyuruh mengubah perangkat), isi "commands" dengan array kosong [].
+3. Jika pengguna hanya mengobrol biasa atau sekadar bertanya status/kecerahan (tanpa menyuruh mengubah perangkat), isi "commands" dengan array kosong [].
 4. GAYA BICARA WAJIB (PENTING UNTUK TEXT-TO-SPEECH):
    - Gunakan Bahasa Indonesia lisan yang natural, sopan, akrab, dan tidak kaku seperti robot.
    - Jawaban "reply" WAJIB singkat dan padat (maksimal 2 kalimat pendek, di bawah 170 karakter jika memungkinkan) karena akan langsung dibacakan oleh speaker.
@@ -220,7 +231,7 @@ FORMAT OUTPUT WAJIB JSON MURNI:
 {
   "reply": "Kalimat jawaban lisan kamu di sini",
   "commands": [
-    { "device": "nama_device", "action": "AKSI" }
+    { "device": "lampu1", "action": "SET_BRIGHTNESS", "brightness": 25 }
   ]
 }`;
   }
@@ -231,7 +242,6 @@ FORMAT OUTPUT WAJIB JSON MURNI:
     this.setTranscript(`"${userText}"`);
     this.setResponse("Sedang memproses...");
 
-    // Tambahkan ucapan pengguna ke riwayat percakapan
     this.chatHistory.push({
       role: "user",
       parts: [{ text: userText }]
@@ -267,7 +277,6 @@ FORMAT OUTPUT WAJIB JSON MURNI:
       const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
       const parsed = this.parseGeminiJson(rawText);
 
-      // Simpan jawaban AI ke riwayat agar percakapan berikutnya tetap nyambung
       this.chatHistory.push({
         role: "model",
         parts: [{ text: JSON.stringify(parsed) }]
@@ -276,7 +285,6 @@ FORMAT OUTPUT WAJIB JSON MURNI:
       this.setResponse(parsed.reply, false);
       this.speakIndonesian(parsed.reply);
 
-      // Jalankan perintah perangkat jika ada
       if (Array.isArray(parsed.commands) && parsed.commands.length > 0) {
         this.executeParsedCommands(parsed.commands);
       }
@@ -300,7 +308,6 @@ FORMAT OUTPUT WAJIB JSON MURNI:
         commands: Array.isArray(obj.commands) ? obj.commands : []
       };
     } catch {
-      // Jika AI membalas teks biasa non-JSON, tetap ucapkan dengan alami
       const plainReply = cleaned.replace(/[*#_`{}"]/g, "").trim() || "Halo, ada yang bisa saya bantu?";
       return { reply: plainReply, commands: [] };
     }
@@ -308,7 +315,7 @@ FORMAT OUTPUT WAJIB JSON MURNI:
 
   executeParsedCommands(commands) {
     const validMap = {
-      lampu1: ["ON", "OFF"],
+      lampu1: ["ON", "OFF", "SET_BRIGHTNESS", "DIM", "BRIGHTEN"],
       lampu2: ["ON", "OFF"],
       kipas: ["ON", "OFF"],
       jemuran: ["OPEN", "CLOSE", "STOP"],
@@ -321,12 +328,23 @@ FORMAT OUTPUT WAJIB JSON MURNI:
 
       if (!validMap[device] || !validMap[device].includes(action)) return;
 
+      const meta = {};
+      if (device === "lampu1" && cmd.brightness !== undefined && cmd.brightness !== null) {
+        const num = Number(cmd.brightness);
+        if (!Number.isNaN(num)) {
+          meta.brightness = Math.max(0, Math.min(100, Math.round(num)));
+        }
+      }
+
+      if (device === "lampu1" && action === "SET_BRIGHTNESS" && typeof meta.brightness !== "number") {
+        return;
+      }
+
       setTimeout(() => {
         if (device === "pintu") {
-          // Tetap melewati modal verifikasi PIN keamanan pintu
           this.onRequestDoorConfirm?.(action);
         } else {
-          this.onExecuteCommand?.(device, action, "hp-voice");
+          this.onExecuteCommand?.(device, action, "hp-voice", meta);
         }
       }, idx * 250);
     });
