@@ -32,7 +32,8 @@ export const DEVICE_DEFINITIONS = {
   },
   lampu1: {
     key: "lampu1",
-    name: "Lampu 1",
+    name: "Lampu 1 (Lampu Pijar)",
+    hasDimmer: true,
     topicCommand: TOPICS.devices.lampu1.command,
     topicState: TOPICS.devices.lampu1.state,
     controls: [
@@ -43,7 +44,7 @@ export const DEVICE_DEFINITIONS = {
   },
   lampu2: {
     key: "lampu2",
-    name: "Lampu 2",
+    name: "Lampu 2 (4 LED)",
     topicCommand: TOPICS.devices.lampu2.command,
     topicState: TOPICS.devices.lampu2.state,
     controls: [
@@ -77,6 +78,7 @@ export class DeviceStore {
     DEVICE_KEYS.forEach((key) => {
       this.states[key] = {
         state: "UNKNOWN",
+        brightness: key === "lampu1" ? 0 : null,
         online: false,
         detail: {},
         lastUpdated: null,
@@ -128,7 +130,7 @@ export class DeviceStore {
   }
 
   applyConfirmedState(validatedData) {
-    const { device, state, online, detail, timestamp, requestId } = validatedData;
+    const { device, state, brightness, online, detail, timestamp, requestId } = validatedData;
     if (!this.states[device]) return null;
 
     const prevState = this.states[device].state;
@@ -146,8 +148,24 @@ export class DeviceStore {
     this.states[device].pendingAction = null;
     this.states[device].pendingSource = null;
 
+    if (device === "lampu1") {
+      if (typeof brightness === "number") {
+        this.states[device].brightness = Math.max(0, Math.min(100, Math.round(brightness)));
+      } else if (state === "OFF") {
+        this.states[device].brightness = 0;
+      } else if (state === "ON" && this.states[device].brightness === 0) {
+        this.states[device].brightness = 100;
+      }
+    }
+
     this.onChange?.();
-    return { prevState, newState: state, wasConfirmed, pendingSource };
+    return {
+      prevState,
+      newState: state,
+      brightness: this.states[device].brightness,
+      wasConfirmed,
+      pendingSource
+    };
   }
 
   setEspAvailability(isOnline) {
