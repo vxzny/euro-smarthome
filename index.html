@@ -3,211 +3,297 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smart Home IoT Dashboard — ESP32 & Gemini AI</title>
-  <link rel="stylesheet" href="css/style.css" />
-  <!-- Library MQTT.js via CDN untuk koneksi WSS -->
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <title>NEXUS HOME — Smart Home IoT Monitoring & Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./css/style.css" />
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+  <script type="module" src="./js/app.js"></script>
 </head>
 <body>
-  <div class="app-container">
-    <!-- HEADER -->
-    <header class="topbar">
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- HEADER -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z" />
+          <circle cx="12" cy="10" r="1.5" fill="currentColor" />
+        </svg>
+      </div>
       <div>
-        <h1>Smart Home IoT Control</h1>
-        <p class="subtitle">ESP32 DevKit V1 • EMQX TLS 1.3 • Gemini AI Assistant</p>
+        <h1 class="system-title">EURO SMARTHOME <span class="badge-tag">IoT + VOICE</span></h1>
+        <p class="system-subtitle">Real-Time MQTT WSS Monitoring &amp; HP Voice Control</p>
       </div>
-      <div class="header-badges">
-        <span id="mqtt-conn-badge" class="badge badge-offline">BROKER DISCONNECTED</span>
-        <span id="esp32-status-badge" class="badge badge-offline">ESP32 OFFLINE</span>
-      </div>
-    </header>
+    </div>
 
-    <!-- BAR TELEMETRI SENSOR LINGKUNGAN -->
-    <section class="sensor-strip">
-      <div class="sensor-pill">
-        <span class="sensor-label">Suhu Ruangan (DHT22)</span>
-        <strong id="sensor-temp">-- °C</strong>
-      </div>
-      <div class="sensor-pill">
-        <span class="sensor-label">Kelembapan Udara</span>
-        <strong id="sensor-hum">-- %</strong>
-      </div>
-      <div class="sensor-pill">
-        <span class="sensor-label">Sensor Hujan</span>
-        <strong id="sensor-rain">Menunggu Data</strong>
-      </div>
-    </section>
-
-    <!-- GRID KONTROL PERANGKAT -->
-    <section class="devices-grid">
-      <!-- LAMPU 1: AC LIGHT DIMMER PWM (LAMPU PIJAR) -->
-      <div class="card device-card" id="card-lampu1">
-        <div class="card-header">
-          <div>
-            <h3>Lampu 1 (Lampu Pijar)</h3>
-            <span class="device-sub">AC Light Dimmer PWM • GPIO 19 &amp; 21</span>
-          </div>
-          <span id="state-lampu1" class="state-tag state-off">OFF</span>
-        </div>
-
-        <div class="btn-group">
-          <button class="btn btn-on" onclick="sendDeviceCommand('lampu1', 'ON')">ON</button>
-          <button class="btn btn-off" onclick="sendDeviceCommand('lampu1', 'OFF')">OFF</button>
-        </div>
-
-        <!-- Slider Kecerahan Lampu Pijar -->
-        <div class="dimmer-control">
-          <div class="dimmer-header">
-            <span>Intensitas Kecerahan</span>
-            <span id="lampu1-brightness-value">0%</span>
-          </div>
-          <input
-            type="range"
-            id="lampu1-brightness-slider"
-            min="0"
-            max="100"
-            value="0"
-          />
-          <div class="preset-row">
-            <button type="button" class="btn-preset" onclick="setLampu1BrightnessPreset(25)">25%</button>
-            <button type="button" class="btn-preset" onclick="setLampu1BrightnessPreset(50)">50%</button>
-            <button type="button" class="btn-preset" onclick="setLampu1BrightnessPreset(75)">75%</button>
-            <button type="button" class="btn-preset" onclick="setLampu1BrightnessPreset(100)">100%</button>
-          </div>
-        </div>
+    <div class="header-right">
+      <div id="mqtt-status-pill" class="status-pill status-offline" title="Status Koneksi MQTT Broker">
+        <span class="pulse-dot"></span>
+        <span id="mqtt-status-text">MQTT DISCONNECTED</span>
       </div>
 
-      <!-- LAMPU 2: 4 LED PARALEL VIA RELAY CH2 -->
-      <div class="card device-card" id="card-lampu2">
-        <div class="card-header">
-          <div>
-            <h3>Lampu 2 (4 LED Ruang)</h3>
-            <span class="device-sub">Relay 2-Ch (CH2) • GPIO 32</span>
-          </div>
-          <span id="state-lampu2" class="state-tag state-off">OFF</span>
-        </div>
-        <div class="btn-group">
-          <button class="btn btn-on" onclick="sendDeviceCommand('lampu2', 'ON')">ON</button>
-          <button class="btn btn-off" onclick="sendDeviceCommand('lampu2', 'OFF')">OFF</button>
-        </div>
+      <!-- Tombol Kontrol Suara Langsung dari Mikrofon HP -->
+      <button id="btn-voice-toggle" type="button" class="btn btn-voice" title="Kontrol Perangkat dengan Suara HP">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="22" />
+        </svg>
+        <span id="voice-btn-label">Suara HP</span>
+      </button>
+
+      <div class="clock-box">
+        <span id="header-time" class="clock-time">--:--:--</span>
+        <span id="header-date" class="clock-date">Memuat tanggal...</span>
       </div>
 
-      <!-- KIPAS 12V VIA RELAY CH1 -->
-      <div class="card device-card" id="card-kipas">
-        <div class="card-header">
-          <div>
-            <h3>Kipas Angin 12V</h3>
-            <span class="device-sub">Relay 2-Ch (CH1) • GPIO 27</span>
-          </div>
-          <span id="state-kipas" class="state-tag state-off">OFF</span>
-        </div>
-        <div class="btn-group">
-          <button class="btn btn-on" onclick="sendDeviceCommand('kipas', 'ON')">ON</button>
-          <button class="btn btn-off" onclick="sendDeviceCommand('kipas', 'OFF')">OFF</button>
+      <button id="btn-open-settings" class="btn btn-outline btn-icon" title="Konfigurasi MQTT Broker WSS">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+        <span>Broker WSS</span>
+      </button>
+
+      <div class="user-profile" title="Profil Operator Sistem">
+        <div class="avatar">SH</div>
+        <div class="user-meta">
+          <span class="user-name">Smart Home Admin</span>
+          <span class="user-role">Operator Utama</span>
         </div>
       </div>
+    </div>
+  </header>
 
-      <!-- PINTU UTAMA SERVO -->
-      <div class="card device-card" id="card-pintu">
-        <div class="card-header">
-          <div>
-            <h3>Pintu Utama</h3>
-            <span class="device-sub" id="detail-pintu">Micro Servo SG90 • GPIO 18 (0°)</span>
-          </div>
-          <span id="state-pintu" class="state-tag state-off">CLOSED</span>
+  <main class="dashboard-container">
+    <!-- PANEL INTERAKTIF ASISTEN SUARA HP -->
+    <section id="voice-assistant-bar" class="voice-banner" aria-label="Asisten Suara HP">
+      <div class="voice-banner-top">
+        <div class="voice-title-group">
+          <span id="voice-status-badge" class="badge-pill">SIAP</span>
+          <strong>Asisten Suara Smart Home (Mikrofon HP)</strong>
         </div>
-        <div class="btn-group">
-          <button class="btn btn-on" onclick="sendDeviceCommand('pintu', 'OPEN')">BUKA</button>
-          <button class="btn btn-off" onclick="sendDeviceCommand('pintu', 'CLOSE')">TUTUP</button>
+       <div class="voice-chips">
+          <button type="button" class="voice-chip" data-voice-sample="Hidupkan lampu 1">"Hidupkan lampu 1"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Matikan lampu 1">"Matikan lampu 1"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Hidupkan lampu 2">"Hidupkan lampu 2"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Matikan lampu 2">"Matikan lampu 2"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Hidupkan kipas">"Hidupkan kipas"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Matikan kipas">"Matikan kipas"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Buka jemuran">"Buka jemuran"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Tutup jemuran">"Tutup jemuran"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Stop jemuran">"Stop jemuran"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Buka pintu">"Buka pintu"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Tutup pintu">"Tutup pintu"</button>
+          <button type="button" class="voice-chip" data-voice-sample="Cek semua status">"Cek semua status"</button>
         </div>
-      </div>
-
-      <!-- JEMURAN OTOMATIS SERVO -->
-      <div class="card device-card" id="card-jemuran">
-        <div class="card-header">
-          <div>
-            <h3>Jemuran Otomatis</h3>
-            <span class="device-sub" id="detail-jemuran">Micro Servo SG90 • GPIO 13 (0°)</span>
-          </div>
-          <span id="state-jemuran" class="state-tag state-off">CLOSED</span>
+      <div class="voice-io-grid">
+        <div class="voice-io-box">
+          <span class="voice-io-label">Perintah Terdeteksi:</span>
+          <span id="voice-transcript-text" class="voice-io-text">Tekan tombol "Suara HP" di atas lalu ucapkan perintah...</span>
         </div>
-        <div class="btn-group">
-          <button class="btn btn-on" onclick="sendDeviceCommand('jemuran', 'OPEN')">BUKA</button>
-          <button class="btn btn-off" onclick="sendDeviceCommand('jemuran', 'CLOSE')">TUTUP</button>
+        <div class="voice-io-box">
+          <span class="voice-io-label">Respons Sistem (Aktual):</span>
+          <span id="voice-response-text" class="voice-io-text voice-reply">Menunggu perintah suara...</span>
         </div>
       </div>
     </section>
 
-    <!-- BAGIAN BAWAH: STATUS BROKER & ASISTEN AI GEMINI -->
-    <section class="bottom-grid">
-      <!-- KARTU STATUS MQTT BROKER & NODE ESP32 -->
-      <div class="card status-card">
-        <div class="card-header">
+    <!-- MAIN SUMMARY KPI -->
+    <section class="kpi-grid" aria-label="Ringkasan Sistem">
+      <article class="kpi-card">
+        <span class="kpi-label">Total Perangkat</span>
+        <div class="kpi-value-row">
+          <strong id="kpi-total" class="kpi-value">5</strong>
+          <span class="kpi-unit">Unit Terdaftar</span>
+        </div>
+      </article>
+
+      <article class="kpi-card kpi-success">
+        <span class="kpi-label">Perangkat Online</span>
+        <div class="kpi-value-row">
+          <strong id="kpi-online" class="kpi-value">0</strong>
+          <span class="kpi-unit">Aktif Terhubung</span>
+        </div>
+      </article>
+
+      <article class="kpi-card kpi-danger">
+        <span class="kpi-label">Perangkat Offline</span>
+        <div class="kpi-value-row">
+          <strong id="kpi-offline" class="kpi-value">5</strong>
+          <span class="kpi-unit">Tidak Merespons</span>
+        </div>
+      </article>
+
+      <article class="kpi-card kpi-primary">
+        <span class="kpi-label">Status Sistem</span>
+        <div class="kpi-value-row">
+          <strong id="kpi-system-status" class="kpi-value kpi-status-text">OFFLINE</strong>
+          <span id="kpi-xiaozhi-badge" class="kpi-unit">Voice HP &amp; MCP</span>
+        </div>
+      </article>
+    </section>
+
+    <!-- DEVICE CONTROL & MONITORING CARDS -->
+    <section class="section-block">
+      <div class="section-header">
+        <div>
+          <h2>Kontrol &amp; Monitoring Perangkat</h2>
+          <p>Status hanya berubah setelah menerima konfirmasi aktual dari ESP32</p>
+        </div>
+        <div class="legend-group">
+          <span class="legend-item"><i class="dot dot-online"></i>Online</span>
+          <span class="legend-item"><i class="dot dot-warning"></i>Menunggu ESP32</span>
+          <span class="legend-item"><i class="dot dot-offline"></i>Offline / Unknown</span>
+        </div>
+      </div>
+
+      <div id="devices-grid" class="devices-grid"></div>
+    </section>
+
+    <!-- ADDITIONAL TELEMETRY & STATUS SECTION -->
+    <section class="telemetry-grid">
+      <article class="panel-card chart-panel">
+        <div class="panel-header">
+          <h3>Grafik Sinyal Wi-Fi ESP32 (RSSI dBm) &amp; Latensi</h3>
+          <span class="panel-badge">Real-Time Telemetry</span>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="telemetry-chart"></canvas>
+        </div>
+      </article>
+
+      <article class="panel-card info-panel">
+        <div class="panel-header">
           <h3>Status MQTT Broker &amp; Node ESP32</h3>
-          <span id="card-esp32-badge" class="badge badge-offline">ESP32 OFFLINE</span>
+          <span id="esp32-lwt-badge" class="badge-pill badge-offline">ESP32 OFFLINE</span>
         </div>
-        <div class="status-list">
-          <div class="status-row">
-            <span>MQTT Broker</span>
-            <strong id="tele-broker">lf0d78dd.ala.asia-southeast1.emqxsl.com</strong>
+        <dl class="spec-list">
+          <div class="spec-row">
+            <dt>MQTT Broker</dt>
+            <dd id="info-broker-host">Belum dikonfigurasi</dd>
           </div>
-          <div class="status-row">
-            <span>Protokol &amp; Keamanan</span>
-            <strong id="tele-protocol">WSS (TLS 1.3) • QoS 1 • ACL</strong>
+          <div class="spec-row">
+            <dt>Protokol &amp; Keamanan</dt>
+            <dd>WSS (TLS 1.3) • QoS 1 • ACL</dd>
           </div>
-          <div class="status-row">
-            <span>ESP32 Client ID</span>
-            <strong id="tele-client-id">esp32-smarthome-01</strong>
+          <div class="spec-row">
+            <dt>ESP32 Client ID</dt>
+            <dd id="info-esp-id">esp32-smarthome-01</dd>
           </div>
-          <div class="status-row">
-            <span>Alamat IP Lokal ESP32</span>
-            <strong id="tele-ip">-</strong>
+          <div class="spec-row">
+            <dt>Alamat IP Lokal ESP32</dt>
+            <dd id="info-esp-ip">-</dd>
           </div>
-          <div class="status-row">
-            <span>Kekuatan Sinyal Wi-Fi</span>
-            <strong id="tele-rssi">- dBm</strong>
+          <div class="spec-row">
+            <dt>Kekuatan Sinyal Wi-Fi</dt>
+            <dd id="info-esp-rssi">-</dd>
           </div>
-          <div class="status-row">
-            <span>Uptime &amp; Free Heap</span>
-            <strong id="tele-uptime-heap">0 mnt • Heap - KB</strong>
+          <div class="spec-row">
+            <dt>Uptime &amp; Free Heap</dt>
+            <dd id="info-esp-uptime">-</dd>
           </div>
-        </div>
-      </div>
-
-      <!-- PANEL ASISTEN GEMINI AI -->
-      <div class="card ai-card">
-        <div class="card-header">
-          <div>
-            <h3>Asisten Suara &amp; Chat Gemini AI</h3>
-            <span class="device-sub">Contoh: &ldquo;Turunkan kecerahan lampu 1 ke 25%&rdquo; atau &ldquo;Naikkan ke 75%&rdquo;</span>
-          </div>
-          <span id="voice-status" class="voice-indicator">Siap</span>
-        </div>
-
-        <div id="chat-messages" class="chat-box">
-          <div class="msg msg-ai">
-            Halo! Saya siap mengontrol perangkat rumah dan mengatur persentase kecerahan Lampu 1. Silakan ketik atau tekan tombol mikrofon.
-          </div>
-        </div>
-
-        <form id="chat-form" class="chat-input-row">
-          <button type="button" id="btn-voice" class="btn-mic" title="Bicara ke Gemini AI">🎤</button>
-          <input
-            type="text"
-            id="chat-input"
-            placeholder="Tulis perintah (mis. Turunkan kecerahan lampu 1 ke 25%)..."
-            autocomplete="off"
-          />
-          <button type="submit" class="btn btn-send">Kirim</button>
-        </form>
-      </div>
+        </dl>
+      </article>
     </section>
+
+    <!-- LOGS SECTION: COMMAND HISTORY & ACTIVITY HISTORY -->
+    <section class="logs-grid">
+      <article class="panel-card">
+        <div class="panel-header">
+          <h3>Riwayat Perintah (Command Queue)</h3>
+          <button id="btn-clear-commands" class="btn-text">Bersihkan</button>
+        </div>
+        <div id="command-log-list" class="log-list">
+          <div class="log-empty">Belum ada perintah yang dikirim.</div>
+        </div>
+      </article>
+
+      <article class="panel-card">
+        <div class="panel-header">
+          <h3>Riwayat Aktivitas &amp; Feedback Sensor</h3>
+          <button id="btn-clear-activities" class="btn-text">Bersihkan</button>
+        </div>
+        <div id="activity-log-list" class="log-list">
+          <div class="log-empty">Menunggu data status dari ESP32...</div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <!-- MODAL 1: KONFIRMASI KEAMANAN PINTU -->
+  <div id="door-confirm-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="door-modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="door-modal-title">Konfirmasi Keamanan Akses Pintu</h3>
+        <button type="button" class="modal-close" data-close-modal="door-confirm-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="door-modal-desc" class="modal-warning-text">
+          Anda akan mengirim perintah kontrol ke Servo Pintu Utama. Pastikan area pintu aman sebelum melanjutkan.
+        </p>
+        <div class="form-group">
+          <label for="door-pin-input">PIN Keamanan Pintu (Opsional jika diatur)</label>
+          <input type="password" id="door-pin-input" maxlength="8" placeholder="Masukkan PIN jika aktif" autocomplete="off" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" data-close-modal="door-confirm-modal">Batal</button>
+        <button type="button" id="btn-confirm-door" class="btn btn-warning">Konfirmasi &amp; Eksekusi</button>
+      </div>
+    </div>
   </div>
 
-  <!-- CONTAINER NOTIFIKASI TOAST (ACK & TIMEOUT) -->
-  <div id="toast-container" class="toast-container"></div>
-
-  <script src="config/config.js"></script>
-  <script src="js/app.js"></script>
+  <!-- MODAL 2: KONFIGURASI KONEKSI MQTT BROKER WSS -->
+  <div id="mqtt-settings-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="settings-modal-title">Konfigurasi MQTT Broker (WSS)</h3>
+        <button type="button" class="modal-close" data-close-modal="mqtt-settings-modal">&times;</button>
+      </div>
+      <form id="mqtt-settings-form" class="modal-body">
+        <p class="modal-hint">
+          Kredensial disimpan secara lokal di browser Anda (<code>localStorage</code>) dan tidak pernah dikirim ke GitHub.
+        </p>
+        <div class="form-group">
+          <label for="cfg-host">Broker Host (EMQX Cloud)</label>
+          <input type="text" id="cfg-host" required placeholder="xxxxxxxx.ala.asia-southeast1.emqxsl.com" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="cfg-port">Port WSS</label>
+            <input type="number" id="cfg-port" value="8084" required />
+          </div>
+          <div class="form-group">
+            <label for="cfg-path">Path</label>
+            <input type="text" id="cfg-path" value="/mqtt" required />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="cfg-username">Username Frontend</label>
+            <input type="text" id="cfg-username" value="web_dashboard" required />
+          </div>
+          <div class="form-group">
+            <label for="cfg-password">Password MQTT</label>
+            <input type="password" id="cfg-password" required placeholder="Password web_dashboard" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="cfg-door-pin">PIN Keamanan Pintu (Opsional — 4-6 digit)</label>
+          <input type="password" id="cfg-door-pin" maxlength="8" placeholder="Kosongkan jika hanya pakai dialog konfirmasi" />
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="btn-disconnect-mqtt" class="btn btn-danger-outline">Putuskan</button>
+          <button type="submit" class="btn btn-primary">Simpan &amp; Hubungkan</button>
+        </div>
+      </form>
+    </div>
+  </div>
 </body>
 </html>
