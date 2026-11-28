@@ -42,7 +42,7 @@ export const TOPICS = {
 export const VALID_ACTIONS = {
   jemuran: ["OPEN", "CLOSE", "STOP"],
   kipas: ["ON", "OFF"],
-  lampu1: ["ON", "OFF"],
+  lampu1: ["ON", "OFF", "SET_BRIGHTNESS", "DIM", "BRIGHTEN"],
   lampu2: ["ON", "OFF"],
   pintu: ["OPEN", "CLOSE", "LOCK", "UNLOCK"]
 };
@@ -66,7 +66,7 @@ export function generateRequestId() {
 /**
  * Membentuk dan memvalidasi payload JSON perintah sebelum dipublikasikan
  */
-export function buildCommandPayload(device, action, source = "web") {
+export function buildCommandPayload(device, action, source = "web", extraPayload = {}) {
   if (!DEVICE_KEYS.includes(device)) {
     throw new Error(`Perangkat tidak dikenal: ${device}`);
   }
@@ -75,13 +75,21 @@ export function buildCommandPayload(device, action, source = "web") {
     throw new Error(`Aksi "${normalizedAction}" tidak valid untuk ${device}`);
   }
 
-  return {
+  const payload = {
     device,
     action: normalizedAction,
     source,
     requestId: generateRequestId(),
     timestamp: Math.floor(Date.now() / 1000)
   };
+
+  if (device === "lampu1" && extraPayload && typeof extraPayload.brightness === "number") {
+    payload.brightness = Math.max(0, Math.min(100, Math.round(extraPayload.brightness)));
+  } else if (device === "lampu1" && normalizedAction === "SET_BRIGHTNESS") {
+    throw new Error("Nilai kecerahan (brightness 0-100) wajib diisi untuk SET_BRIGHTNESS");
+  }
+
+  return payload;
 }
 
 /**
@@ -109,11 +117,19 @@ export function parseAndValidateState(rawPayload) {
     return { valid: false, error: `State "${normalizedState}" tidak valid untuk ${device}` };
   }
 
+  const parsedBrightness =
+    typeof data.brightness === "number"
+      ? data.brightness
+      : typeof data.detail?.brightness === "number"
+      ? data.detail.brightness
+      : null;
+
   return {
     valid: true,
     data: {
       device,
       state: normalizedState,
+      brightness: parsedBrightness,
       online: Boolean(data.online),
       source: data.source || "esp32",
       requestId: data.requestId || null,
