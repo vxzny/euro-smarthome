@@ -73,11 +73,20 @@ document.addEventListener("DOMContentLoaded", () => {
     onDeviceState: (stateData) => {
       const result = deviceStore.applyConfirmedState(stateData);
       const devName = DEVICE_DEFINITIONS[stateData.device]?.name || stateData.device;
+      const hasBrightness =
+        stateData.device === "lampu1" && typeof result?.brightness === "number";
+
       if (stateData.requestId) {
         notifier.updateCommandStatus(stateData.requestId, "CONFIRMED");
       }
+
       if (result?.wasConfirmed) {
-        const confirmMsg = `${devName} berhasil diubah ke ${stateData.state}`;
+        const confirmMsg = hasBrightness
+          ? stateData.state === "ON"
+            ? `${devName} diatur ke kecerahan ${result.brightness}%`
+            : `${devName} dimatikan (0%)`
+          : `${devName} berhasil diubah ke ${stateData.state}`;
+
         notifier.showToast(confirmMsg, "success");
 
         if (result.pendingSource === "web") {
@@ -86,15 +95,18 @@ document.addEventListener("DOMContentLoaded", () => {
           voiceController?.handleCommandOutcome({
             deviceKey: stateData.device,
             state: stateData.state,
+            brightness: result.brightness,
             success: true,
             isTimeout: false
           });
         }
       }
-      notifier.addActivityLog(
-        `${devName} status aktual: ${stateData.state}`,
-        stateData.source || "esp32"
-      );
+
+      const activityText = hasBrightness
+        ? `${devName} status aktual: ${stateData.state} (${result.brightness}%)`
+        : `${devName} status aktual: ${stateData.state}`;
+
+      notifier.addActivityLog(activityText, stateData.source || "esp32");
     },
     onSystemStatus: (telemetry) => {
       ui.updateEspTelemetry(telemetry, deviceStore.espAvailable);
@@ -131,17 +143,25 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      const cmd = mqttService.publishCommand(device, action, source);
+      const extraPayload = {};
+      if (device === "lampu1" && typeof meta.brightness === "number") {
+        extraPayload.brightness = meta.brightness;
+      }
+
+      const cmd = mqttService.publishCommand(device, action, source, extraPayload);
       const devName = DEVICE_DEFINITIONS[device]?.name || device;
+      const actionLabel =
+        action === "SET_BRIGHTNESS" ? `SET_BRIGHTNESS (${cmd.brightness}%)` : cmd.action;
+
       deviceStore.markCommandPending(device, cmd.requestId, action, source);
       notifier.addCommandLog({
         requestId: cmd.requestId,
         deviceName: devName,
-        action: cmd.action,
+        action: actionLabel,
         source,
         status: "PENDING"
       });
-      notifier.showToast(`Mengirim perintah ${action} ke ${devName}...`, "info");
+      notifier.showToast(`Mengirim perintah ${actionLabel} ke ${devName}...`, "info");
     } catch (err) {
       notifier.showToast(err.message, "error");
       if (source === "hp-voice") {
@@ -165,8 +185,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   voiceController = new VoiceAssistantController({
     deviceStore,
-    onExecuteCommand: (device, action, source) => {
-      dispatchDeviceCommand(device, action, source);
+    onExecuteCommand: (device, action, source, meta = {}) => {
+      dispatchDeviceCommand(device, action, source, meta);
     },
     onRequestDoorConfirm: (action) => {
       ui.openDoorModal(action);
